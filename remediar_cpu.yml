@@ -1,0 +1,51 @@
+---
+- name: Remediacion CPU alta - matar proceso mas intensivo
+  hosts: collector-01
+  become: true
+  vars:
+    umbral_cpu: 30
+    max_iteraciones: 16
+
+  tasks:
+    - name: Ciclo de remediacion - matar proceso top CPU
+      ansible.builtin.shell: |
+        for i in $(seq 1 {{ max_iteraciones }}); do
+          CPU=$(top -bn2 -d1 | grep "Cpu(s)" | tail -1 | awk '{print $2}' | cut -d. -f1)
+          echo "Iteracion $i - CPU actual: ${CPU}%"
+
+          if [ "$CPU" -lt {{ umbral_cpu }} ]; then
+            echo "CPU bajo umbral (${CPU}% < {{ umbral_cpu }}%). Remediacion completada."
+            exit 0
+          fi
+
+          PID=$(ps aux --sort=-%cpu | grep -v "^root.*ps\|grep\|ansible\|python\|sshd\|bash\|awk\|sort\|top" | awk 'NR==2 {print $2}')
+          PROC=$(ps aux --sort=-%cpu | grep -v "^root.*ps\|grep\|ansible\|python\|sshd\|bash\|awk\|sort\|top" | awk 'NR==2 {print $11}')
+
+          if [ -z "$PID" ]; then
+            echo "No se encontro proceso candidato. Abortando."
+            exit 1
+          fi
+
+          echo "Matando proceso: $PROC (PID: $PID) - CPU: ${CPU}%"
+          kill -9 $PID
+          sleep 3
+        done
+
+        echo "Se alcanzo el maximo de iteraciones sin bajar el umbral."
+        exit 1
+      register: remediacion
+      changed_when: true
+
+    - name: Log de remediacion
+      ansible.builtin.debug:
+        msg: "{{ remediacion.stdout_lines }}"
+
+    - name: CPU final
+      ansible.builtin.shell: |
+        top -bn2 -d1 | grep "Cpu(s)" | tail -1 | awk '{print $2}'
+      register: cpu_final
+      changed_when: false
+
+    - name: Resultado final
+      ansible.builtin.debug:
+        msg: "Remediacion finalizada. CPU final: {{ cpu_final.stdout }}%"
