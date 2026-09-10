@@ -1,48 +1,89 @@
 ---
-- name: Remediacion CPU alta - matar proceso mas intensivo
+- name: Remediacion CPU alta - matar procesos de alto consumo
   hosts: collector-01
   become: true
+  gather_facts: false
+
   vars:
     umbral_cpu: 30
     max_iteraciones: 16
+    espera_entre_kills: 3
+    # Lista blanca: solo estos procesos pueden ser eliminados.
+    # Las comillas son obligatorias: sin ellas, YAML interpreta yes como booleano.
+    procesos_remediables:
+      - "yes"
+      - "stress"
+      - "stress-ng"
 
   tasks:
     - name: Ciclo de remediacion - matar proceso top CPU
-      ansible.builtin.shell: |
-        for i in $(seq 1 {{ max_iteraciones }}); do
-          CPU=$(top -bn2 -d1 | grep "Cpu(s)" | tail -1 | awk '{print $2}' | cut -d. -f1)
-          echo "Iteracion $i - CPU actual: ${CPU}%"
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -uo pipefail
 
-          if [ "$CPU" -lt {{ umbral_cpu }} ]; then
-            echo "CPU bajo umbral (${CPU}% < {{ umbral_cpu }}%). Remediacion completada."
-            exit 0
-          fi
+          PATRON="{{ procesos_remediables | join('|') }}"
+          MATADOS=0
 
-          PID=$(ps aux --sort=-%cpu | grep -v "^root.*ps\|grep\|ansible\|python\|sshd\|bash\|awk\|sort\|top" | awk 'NR==2 {print $2}')
-          PROC=$(ps aux --sort=-%cpu | grep -v "^root.*ps\|grep\|ansible\|python\|sshd\|bash\|awk\|sort\|top" | awk 'NR==2 {print $11}')
+          cpu_usada() {
+            top -bn2 -d1 | grep -i "Cpu(s)" | tail -1 | \
+              awk '{for (i=1; i<=NF; i++) if ($i ~ /^id,?$/) {printf "%d\n", 100 - $(i-1); exit}}'
+          }
 
-          if [ -z "$PID" ]; then
-            echo "No se encontro proceso candidato. Abortando."
-            exit 1
-          fi
+          for i in $(seq 1 {{ max_iteraciones }}); do
+            CPU=$(cpu_usada)
 
-          echo "Matando proceso: $PROC (PID: $PID) - CPU: ${CPU}%"
-          kill -9 $PID
-          sleep 3
-        done
+            if [ -z "$CPU" ]; then
+              echo "No se pudo leer el uso de CPU. Abortando."
+              echo "PROCESOS_MATADOS=${MATADOS}"
+              exit 1
+            fi
 
-        echo "Se alcanzo el maximo de iteraciones sin bajar el umbral."
-        exit 1
+            echo "Iteracion $i - CPU actual: ${CPU}%"
+
+            if [ "$CPU" -lt {{ umbral_cpu }} ]; then
+              echo "CPU bajo umbral (${CPU}% < {{ umbral_cpu }}%). Remediacion completada."
+              echo "PROCESOS_MATADOS=${MATADOS}"
+              exit 0
+            fi
+
+            LINEA=$(ps -eo pid,comm,pcpu --sort=-pcpu --no-headers | \
+                    awk -v p="^(${PATRON})\$" '$2 ~ p {print $1, $2, $3; exit}')
+
+            if [ -z "$LINEA" ]; then
+              echo "CPU en ${CPU}% pero no hay procesos remediables (${PATRON}). No se toca nada."
+              echo "PROCESOS_MATADOS=${MATADOS}"
+              exit 0
+            fi
+
+            read -r PID PROC PCPU <<< "$LINEA"
+            echo "Matando proceso: ${PROC} (PID: ${PID}, CPU proceso: ${PCPU}%)"
+
+            if kill -9 "$PID" 2>/dev/null; then
+              MATADOS=$((MATADOS + 1))
+            else
+              echo "El PID ${PID} ya no existe. Continuando."
+            fi
+
+            sleep {{ espera_entre_kills }}
+          done
+
+          echo "Se alcanzo el maximo de iteraciones ({{ max_iteraciones }}) sin bajar del umbral."
+          echo "PROCESOS_MATADOS=${MATADOS}"
+          exit 1
       register: remediacion
-      changed_when: true
+      changed_when: "'PROCESOS_MATADOS=0' not in remediacion.stdout"
 
     - name: Log de remediacion
       ansible.builtin.debug:
         msg: "{{ remediacion.stdout_lines }}"
 
     - name: CPU final
-      ansible.builtin.shell: |
-        top -bn2 -d1 | grep "Cpu(s)" | tail -1 | awk '{print $2}'
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          top -bn2 -d1 | grep -i "Cpu(s)" | tail -1 | \
+            awk '{for (i=1; i<=NF; i++) if ($i ~ /^id,?$/) {printf "%d\n", 100 - $(i-1); exit}}'
       register: cpu_final
       changed_when: false
 
