@@ -1,0 +1,54 @@
+---
+- name: Remediacion agente caido - reinicio de Elastic Agent
+  hosts: collector-01
+  become: true
+  gather_facts: false
+
+  vars:
+    servicio: elastic-agent
+    espera_post_arranque: 10
+
+  tasks:
+    - name: Estado del servicio antes de remediar
+      ansible.builtin.command: "systemctl is-active {{ servicio }}"
+      register: estado_previo
+      changed_when: false
+      failed_when: false
+
+    - name: Reportar estado previo
+      ansible.builtin.debug:
+        msg: "Estado de {{ servicio }} antes de remediar: {{ estado_previo.stdout | default('desconocido') }}"
+
+    - name: Salir si el servicio ya esta activo
+      ansible.builtin.meta: end_play
+      when: estado_previo.stdout == "active"
+
+    - name: Capturar ultimos logs antes del reinicio
+      ansible.builtin.command: "journalctl -u {{ servicio }} -n 20 --no-pager"
+      register: logs_previos
+      changed_when: false
+      failed_when: false
+
+    - name: Registrar logs para diagnostico
+      ansible.builtin.debug:
+        msg: "{{ logs_previos.stdout_lines }}"
+
+    - name: Iniciar el servicio
+      ansible.builtin.systemd:
+        name: "{{ servicio }}"
+        state: started
+        enabled: true
+
+    - name: Esperar estabilizacion
+      ansible.builtin.pause:
+        seconds: "{{ espera_post_arranque }}"
+
+    - name: Verificar estado posterior
+      ansible.builtin.command: "systemctl is-active {{ servicio }}"
+      register: estado_posterior
+      changed_when: false
+      failed_when: estado_posterior.stdout != "active"
+
+    - name: Resultado final
+      ansible.builtin.debug:
+        msg: "Remediacion completada. {{ servicio }} paso de '{{ estado_previo.stdout }}' a '{{ estado_posterior.stdout }}'."
