@@ -8,10 +8,33 @@ ingest", complementaria al volumen (license_usage.log) y al uso
 
 No requiere acceso a _internal ni _audit — corre sobre los índices normales
 del cliente.
+
+CORREGIDO EN FASE 3A (ver DECISIONS.md D011): `| metadata type=sourcetypes`
+NO tiene dimensión "index" en su salida (confirmado empíricamente contra
+Splunk Enterprise 10.4.3 real) — sus únicos campos son sourcetype, firstTime,
+lastTime, recentTime, totalCount, type. El parámetro `index=` solo FILTRA
+qué índices se incluyen en el cómputo; si dos índices comparten el mismo
+sourcetype, sus tiempos quedan mezclados en una sola fila sin forma de saber
+a qué índice corresponde cada uno. La versión original de esta query (antes
+de Fase 3A) hacía `| eval index=split(index, "~")` sobre un campo `index` que
+simplemente no existe en la salida real de `metadata type=sourcetypes` —
+producía una columna "index" vacía en todos los casos, silenciosamente. La
+corrección de abajo usa `| map` para ejecutar `metadata` una vez POR ÍNDICE
+y así poder atribuir el resultado al índice correcto explícitamente.
+
+Costo: `map` ejecuta una subbúsqueda por cada índice distinto (`maxsearches`
+acotado a 100 -- entornos con más de 100 índices deben subir ese límite o
+paginar). Para el volumen típico de este producto (decenas a un par de
+cientos de índices, no miles) el costo es bajo.
+
+Export a CSV: sample-data/schema/last_seen.csv
+(esquema: index, sourcetype, last_seen_days_ago)
 ```
 
-| metadata type=sourcetypes index=*
+| eventcount summarize=false index=*
+| dedup index
+| fields index
+| map maxsearches=100 search="| metadata type=sourcetypes index=$index$ | eval index=\"$index$\""
 | eval last_seen_days_ago=round((now()-recentTime)/86400, 1)
-| eval index=split(index, "~")
 | table index, sourcetype, last_seen_days_ago
 | sort - last_seen_days_ago

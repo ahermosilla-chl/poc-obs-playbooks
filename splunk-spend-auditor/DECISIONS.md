@@ -174,6 +174,96 @@ peor tipo de falso positivo posible para este producto.
 
 ---
 
+## D010 — Filtrar saved searches instaladas por Splunk mismo (`owner="nobody"`)
+
+**Contexto:** validado en Fase 3A contra una instancia Splunk Enterprise
+10.4.3 real (Docker, Trial license — ver PROJECT_STATUS.md). Sin ningún dato
+ni configuración del cliente todavía, `/servicesNS/-/-/saved/searches`
+devolvió **176 saved searches**, de las cuales **172 eran contenido
+instalado por Splunk mismo** (apps `splunk_instrumentation` [117],
+`SplunkDeploymentServerConfig` [29], `splunk_monitoring_console` [13],
+`splunk_rapid_diag`, `audit_trail`, `splunk-rolling-upgrade`, más 10 reportes
+por defecto de la app `search`) y solo 4 eran contenido real (2 creadas para
+la prueba, 2 de `audit_trail` con `owner=admin`).
+
+**Decisión:** el collector REST filtra las entries de
+`/servicesNS/-/-/saved/searches` cuyo `eai:acl.owner == "nobody"` antes de
+construir el DataFrame de saved searches, y por lo tanto antes de que
+lleguen a `build_datasets`/`classify_all`.
+
+**Razón:** sin este filtro, dos problemas concretos y confirmados:
+1. Genera datasets fantasma sobre índices internos de Splunk (`_internal`,
+   `_introspection`, `_telemetry`, ...) que el cliente no administra ni le
+   interesa auditar — ruido visible en el reporte final.
+2. Muchas de esas saved searches de sistema usan `tstats`/data models
+   (confianza `PARTIAL` del parser SPL — ver D006), lo que infla
+   `partial_or_unknown_ratio` del entorno completo. En la prueba, esto subió
+   el ratio de ~46% a ~71%, cruzando el umbral de 50% de D009 y forzando
+   `UNKNOWN` sobre `lsa_waste` (300 eventos, 0 búsquedas, exactamente el caso
+   que el producto existe para encontrar) en vez de `POSSIBLE_WASTE`. Con el
+   filtro aplicado, el ratio bajó a 46% y `lsa_waste` clasificó
+   correctamente. Este no es un caso hipotético: es el comportamiento real
+   de una instancia Splunk apenas instalada.
+
+**Señal usada:** `owner == "nobody"` es la convención estándar de Splunk
+para objetos sin dueño humano (instalados por una app en tiempo de
+instalación), a diferencia de objetos creados por un usuario real, cuyo
+`owner` sigue siendo ese usuario incluso si se comparten a nivel app/global
+(`sharing=app`/`global` no cambia el `owner`).
+
+**Limitación conocida y aceptada (no es un bug):** la señal no es 100%
+precisa. En la validación, la app `audit_trail` registra su contenido con
+`owner="admin"` en vez de `"nobody"`, y 2 de sus 2 saved searches
+sobrevivieron al filtro. Se descartó filtrar por nombre de app (deny-list)
+porque la app `search` mezcla contenido de sistema (10 reportes por defecto)
+con contenido real del cliente (ahí es donde la mayoría de clientes crean
+sus propios reportes/alertas) — un deny-list por app habría descartado
+también contenido real. El impacto de este residual es mínimo: esas saved
+searches sobrevivientes generan como máximo un dataset fantasma con 0 GB/día
+(nunca aparecen en `license_usage.log`), invisible en la práctica en
+cualquier reporte con datos reales de cliente.
+
+**Tests de regresión:** `tests/test_rest_collector.py::test_saved_searches_excludes_splunk_bundled_content_owned_by_nobody`.
+
+---
+
+## D011 — `metadata type=sourcetypes` no tiene dimensión `index`; corregido con `map`
+
+**Contexto:** validado en Fase 3A contra Splunk Enterprise 10.4.3 real. La
+query `queries/metadata_last_seen.spl` de Fase 2 asumía
+`| metadata type=sourcetypes index=*` devolvía un campo `index` (de ahí
+`| eval index=split(index, "~")`, un patrón visto en foros de Splunk para
+separar valores concatenados con `~` cuando SÍ hay desglose por índice en
+otros comandos). **Esto es incorrecto para `metadata type=sourcetypes`:**
+sus únicos campos de salida son `sourcetype`, `firstTime`, `lastTime`,
+`recentTime`, `totalCount`, `type` — nunca `index`. El parámetro `index=`
+solo filtra qué índices entran al cómputo; no es una dimensión de
+agrupación. Con la query original, la columna `index` del resultado quedaba
+vacía en el 100% de los casos, **sin ningún error ni warning** — el tipo de
+falla silenciosa más peligroso para este producto, porque un CSV exportado
+así habría roto el join por `(index, sourcetype)` de `build_datasets.py` sin
+que nadie lo notara hasta revisar el reporte final a mano.
+
+**Decisión:** `queries/metadata_last_seen.spl` ahora obtiene la lista de
+índices con `| eventcount summarize=false index=* | dedup index`, y ejecuta
+`metadata type=sourcetypes` una vez POR ÍNDICE vía `| map`, inyectando el
+valor real del índice con `eval index="$index$"` dentro de la subbúsqueda.
+Verificado end-to-end contra los 7 índices del laboratorio de Fase 3A.
+
+**Razón:** es el único patrón que permite atribuir `last_seen_days_ago` al
+`(index, sourcetype)` correcto cuando el mismo `sourcetype` aparece en más de
+un índice — que es precisamente el escenario en el que la query original
+fallaba en silencio.
+
+**Limitación conocida y aceptada:** `map` tiene un límite `maxsearches`
+(puesto en 100); entornos con más de 100 índices distintos necesitan subir
+ese límite explícitamente o paginar. El collector REST (`rest_collector.py`)
+todavía **no** ejecuta esta query — `sources_available["last_seen"]` sigue
+en `False` (ver docstring del módulo); wire-up queda para Fase 3B junto con
+el resto del hardening del collector real.
+
+---
+
 ## D008 — Fase 2 no incluye pruebas contra un Splunk real
 
 **Decisión:** toda la validación técnica de Fase 2 se hace contra datos
@@ -186,3 +276,42 @@ collector REST contra un Splunk real requiere credenciales/acceso que son una
 decisión explícita del usuario (ver PROJECT_STATUS.md, "Decisiones pendientes").
 El modo CSV, que no requiere esa decisión, queda completamente validado en
 esta fase.
+
+**Superado en Fase 3A:** el collector REST se validó contra una instancia
+Splunk Enterprise 10.4.3 real (Docker, Trial license de 60 días — decisión
+de laboratorio, no de producción, tomada dentro de esta sesión). Ver D010,
+D011 y D012 para los bugs reales encontrados y corregidos, y
+PROJECT_STATUS.md para el resumen completo.
+
+---
+
+## D012 — Coerción numérica de resultados REST (la API de Splunk serializa todo como string)
+
+**Contexto:** validado en Fase 3A. Al ejecutar `queries/ingest_by_index_sourcetype.spl`
+vía `/services/search/jobs?output_mode=json` contra Splunk real y pasar el
+resultado a `build_datasets()`, el pipeline falló con
+`TypeError: dtype 'str' does not support operation 'mean'` en el
+`.groupby(...).agg(["mean", "count"])` de la columna `gb`.
+
+**Causa:** la REST API de Splunk serializa **todos** los valores de
+`results` como string en `output_mode=json`, incluso los numéricos (`"gb":
+"0.0004"`, no `"gb": 0.0004`). El modo CSV nunca tuvo este problema porque
+`pandas.read_csv` infiere tipos automáticamente; `pd.DataFrame(results)`
+sobre JSON crudo no lo hace. Este bug no podía haberse encontrado en Fase 2
+(datos 100% CSV) — es exactamente el tipo de gap que Fase 3A existe para
+encontrar.
+
+**Decisión:** `_run_oneshot_search()` en `rest_collector.py` convierte a
+numérico cada columna del DataFrame resultante cuando el 100% de sus valores
+son convertibles (`pd.to_numeric` sin ningún `NaN` resultante); columnas de
+texto (p.ej. `index`, `sourcetype`) quedan intactas porque no son 100%
+numéricas.
+
+**Alternativa descartada:** convertir columnas por nombre conocido (p.ej.
+"si la columna se llama 'gb', convertir siempre"). Se descartó porque acopla
+el collector a los nombres de columna de una query específica; la conversión
+"si el 100% de los valores son numéricos" es genérica y funciona para
+cualquier query futura sin cambios en el collector.
+
+**Tests de regresión:** `tests/test_rest_collector.py::test_oneshot_search_coerces_fully_numeric_columns_to_numeric`
+y `::test_oneshot_search_leaves_mixed_columns_as_text`.

@@ -1,14 +1,96 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 2 (validación técnica + MVP funcional)
+Última actualización: cierre de Fase 3A (validación contra Splunk real de laboratorio)
 
 ## Estado actual
 
-**Fase 2 completada.** El MVP técnico está construido, probado y validado
-end-to-end contra un escenario sintético que cubre los 10 casos pedidos en
-el brief original, más 2 adicionales descubiertos durante la propia
-validación. No se ha probado todavía contra un Splunk real ni se ha
-publicado nada — eso es Fase 3, y no ha empezado.
+**Fase 2 completada. Fase 3A completada — GO.** El MVP técnico (Fase 2) está
+construido, probado y validado end-to-end contra un escenario sintético que
+cubre los 10 casos pedidos en el brief original, más 2 adicionales
+descubiertos durante la propia validación. Fase 3A validó ese mismo diseño
+contra una instancia Splunk Enterprise real (no solo CSVs sintéticos) y
+encontró y corrigió 3 bugs reales que Fase 2 no podía detectar por su
+naturaleza (ver sección "Fase 3A" abajo). Fase 3B (hardening del collector
+real) y Fase 3C (reporte con datos reales) son los próximos pasos y todavía
+no empezaron.
+
+## Fase 3A — Validación contra Splunk real de laboratorio (COMPLETADA)
+
+**Entorno usado:** Splunk Enterprise 10.4.3, imagen Docker oficial
+(`splunk/splunk:latest`, `docker.io`), corriendo bajo **Trial license** de
+60 días (no Free — Free deshabilita alerting y autenticación por completo,
+lo cual habría impedido probar exactamente lo que había que probar). Es un
+laboratorio efímero dentro de este entorno de desarrollo, no una instancia
+persistente ni de producción.
+
+**Escenario de laboratorio:** 7 índices (`lsa_high_value`, `lsa_waste`,
+`lsa_protected`, `lsa_normal`, `lsa_review`, `lsa_scheduled_only`,
+`lsa_alert_only`) con volumen de ingest distinto por índice (vía
+`splunk add oneshot`), 15 búsquedas interactivas reales (12 sobre
+`lsa_high_value`, 3 sobre `lsa_normal`) para poblar `_audit`, una saved
+search programada real (`lsa-scheduled-billing-report`) y una alerta real
+con acción de email (`lsa-alert-heartbeat-missing`) creadas vía REST API con
+un token Bearer generado en la propia instancia.
+
+**Resultado de las 8 queries `.spl`:** 8/8 ejecutan sin error contra Splunk
+real; 7/8 se comportan exactamente como se documentó en Fase 2;
+`metadata_last_seen.spl` tenía un bug de diseño (ver D011) y se corrigió.
+
+**Resultado del collector REST (`rest_collector.py`):** se ejecutó
+`collect()` end-to-end (no simulado) contra la instancia real, seguido del
+pipeline completo (`build_datasets` → `classify_all`). Encontró 2 bugs reales
+adicionales (D010, D012), ambos corregidos con tests de regresión. Tras las
+3 correcciones, las 7 clasificaciones del escenario de laboratorio
+coincidieron exactamente con lo esperado: `lsa_high_value`→`HIGH_VALUE`
+(interactivo), `lsa_scheduled_only`→`HIGH_VALUE` (programada),
+`lsa_alert_only`→`HIGH_VALUE` (alerta), `lsa_normal`→`NORMAL`,
+`lsa_protected`→`PROTECTED` (patrón), `lsa_review`→`REVIEW`,
+`lsa_waste`→`POSSIBLE_WASTE` — el caso central que el producto existe para
+encontrar, funcionando de punta a punta con datos 100% reales de Splunk.
+
+**Bugs reales encontrados y corregidos (ninguno detectable solo con CSVs
+sintéticos):**
+1. **D012** — la REST API de Splunk serializa todos los resultados como
+   string; `build_datasets` fallaba con `TypeError` al esperar `gb` numérico.
+2. **D010** — `/servicesNS/-/-/saved/searches` devuelve también ~170 saved
+   searches instaladas por Splunk mismo, que sin filtrar contaminan el
+   listado de datasets y disparan incorrectamente la regla `UNKNOWN` de
+   entorno de D009 (el ratio de partial/unknown subió de ~46% a ~71% solo
+   por ruido de sistema). Corregido filtrando `owner == "nobody"`.
+3. **D011** — `metadata type=sourcetypes` no tiene dimensión `index`; la
+   query de Fase 2 asumía que sí y producía una columna vacía en silencio.
+   Corregido con `| map` (una ejecución por índice).
+
+**Hipótesis de Fase 2 confirmadas (no invalidadas):**
+- `license_usage.log` desglosado por `(index, sourcetype)` es preciso y
+  aparece disponible en minutos, no horas — confirmado con bytes reales.
+- El wildcard `servicesNS/-/-/saved/searches` es necesario y funciona (D002,
+  fuente 3 de `splunk-data-sources.md`).
+- La autenticación Bearer token funciona exactamente como documentado (tras
+  habilitar token auth, que está deshabilitado por defecto — no es un
+  problema del producto, es un paso de setup del admin de Splunk, ya
+  documentado implícitamente en D002).
+- El principio D009 (UNKNOWN a nivel de entorno) funciona correctamente una
+  vez quitado el ruido de D010 — de hecho la validación demostró
+  exactamente el escenario que D009 fue diseñado para prevenir, y cómo
+  falla si no se filtra el ruido de contenido de sistema.
+
+**No probado en Fase 3A (fuera de alcance, requiere producción o Splunk
+Cloud):** squashing de host/source con alta cardinalidad real (el
+laboratorio es un solo container/host), diferencias específicas de permisos
+de Splunk Cloud, volumen a escala de producción (GB/TB reales).
+
+**Tests:** 72 passing (69 de Fase 2 + 3 nuevos de regresión en
+`tests/test_rest_collector.py`, con `httpx.MockTransport`, sin dependencia
+de Docker/red para correr en CI).
+
+**Recomendación de cierre de Fase 3A: GO.** El diseño central del producto
+(unidad `(index, sourcetype)`, D002 dos collectors, D009 UNKNOWN a nivel de
+entorno) sobrevivió la validación contra Splunk real sin cambios de fondo.
+Los 3 bugs encontrados eran de implementación, no de diseño, y ya están
+corregidos con tests. Fase 3B (hardening: timeouts, manejo de errores,
+permisos insuficientes, mensajes CLI) y Fase 3C (reporte real desde estos
+datos de laboratorio) son los próximos pasos naturales.
 
 ## Resumen ejecutivo (para retomar el contexto en una nueva sesión)
 
@@ -107,17 +189,30 @@ resuelve con el mecanismo manual de `protected_overrides.txt`.
    con roles restringidos — no se ha probado contra una instancia real
    todavía (se necesita acceso, ver "Próximos pasos").
 
-## Próximos pasos (Fase 3 — no iniciada)
+## Próximos pasos
 
-1. Conseguir acceso a una instancia Splunk real (Splunk Free/Developer instance
-   local, o instancia de prueba) para validar el collector REST contra datos
-   reales, no solo CSV sintético. **Requiere decisión/acceso del usuario.**
-2. Publicar el Quickscan gratuito según `docs/validation-plan.md`.
-3. Preparar el repositorio para GitHub (público, con licencia, sin credenciales
-   ni datos de ejemplo sensibles — los `sample-data/case_mixed/*.csv` actuales
-   son 100% sintéticos y no tienen ningún problema para publicarse tal cual).
-4. Medir señales de interés (estrellas, descargas, preventas) antes de construir
-   el motor completo de reportes Pro.
+**Fase 3B (hardening del MVP) — no iniciada:**
+1. Terminar de conectar `metadata_last_seen.spl` (ya corregido, D011) al
+   collector REST — hoy `sources_available["last_seen"]` está fijo en
+   `False`, la query nunca se ejecuta desde `collect()`.
+2. Manejo de errores/timeouts explícitos: instancia inaccesible, permisos
+   insuficientes por fuente (parcialmente cubierto ya — `try/except` por
+   fuente degrada en vez de fallar), queries parcialmente disponibles.
+3. Mensajes CLI claros para cada modo de degradación.
+4. Tests adicionales de hardening (más allá de los 3 de regresión ya
+   agregados en Fase 3A).
+
+**Fase 3C (reporte real) — no iniciada:**
+1. Generar quickscan + audit completo (HTML/Markdown) usando datos del
+   laboratorio de Fase 3A.
+2. Revisión manual del HTML para un Splunk Admin/Platform Engineer/manager/FinOps.
+
+**Más adelante:**
+- Publicar el Quickscan gratuito según `docs/validation-plan.md`.
+- Preparar el repositorio para GitHub público (licencia, sin credenciales).
+- Medir señales de interés antes de construir el motor completo Pro.
+- Validar contra Splunk Cloud real y a escala de producción (fuera de
+  alcance del laboratorio Docker de Fase 3A — ver esa sección arriba).
 
 ## Decisiones pendientes que requieren al usuario
 
@@ -125,12 +220,14 @@ resuelve con el mecanismo manual de `protected_overrides.txt`.
   quedó pendiente de investigación de trademark).
 - Precio final de lanzamiento del Quickscan/reporte Pro (hay un rango propuesto
   en `docs/product-spec.md`, pero el precio final es una decisión de negocio).
-- Si se usará una cuenta de Splunk real del propio Alvaro para las pruebas de
-  Fase 3, o una instancia de desarrollo separada.
+- Si se usará una cuenta de Splunk real de producción para pruebas futuras, o
+  se sigue trabajando contra laboratorios efímeros como el de Fase 3A.
 
-## Recomendación de cierre de Fase 2
+## Recomendación de cierre de Fase 3A
 
-**GO.** No hay nada en el diseño ni en la validación técnica que bloquee
-avanzar a Fase 3. El siguiente paso natural es la decisión pendiente #3 de
-arriba (acceso a un Splunk real) para poder ejercitar el collector REST, y en
-paralelo, publicar el Quickscan gratuito para empezar a medir interés real.
+**GO.** El collector REST y las queries SPL de Fase 2 funcionan contra un
+Splunk real, y los 3 bugs que la validación encontró ya están corregidos y
+cubiertos por tests de regresión. El diseño central (D002, D004, D009) no
+necesitó cambios de fondo. El siguiente paso natural es Fase 3B (terminar el
+collector real: wiring de `last_seen`, hardening de errores) seguido de Fase
+3C (generar y revisar el reporte con estos datos reales).

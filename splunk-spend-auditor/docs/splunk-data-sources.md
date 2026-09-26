@@ -147,6 +147,25 @@ Si el collector no hace esto explícitamente, subestimará el uso real y
 generará falsos positivos de "sin uso". **Esto es un requisito de
 implementación, no opcional.**
 
+**Gotcha nuevo, encontrado en Fase 3A contra Splunk Enterprise 10.4.3 real
+[HECHO]:** el wildcard `servicesNS/-/-/saved/searches` necesario para el
+punto anterior **también** devuelve todo el contenido instalado por Splunk
+mismo (apps de sistema: `splunk_instrumentation`, monitoring console,
+deployment server, `audit_trail`, etc.). En una instancia recién instalada,
+sin ningún dato ni saved search del cliente todavía, esto fueron **176
+saved searches de sistema devueltas junto a 2 reales creadas para la
+prueba** — muchas usan `tstats`/data models (confianza `PARTIAL`) y, sin
+filtrar, inflan `partial_or_unknown_ratio` lo suficiente para disparar la
+regla `UNKNOWN` de entorno de D009 incluso cuando la cobertura real del
+cliente es buena (ver DECISIONS.md D010). El collector ahora filtra por
+`eai:acl.owner == "nobody"` (convención de Splunk para contenido sin dueño
+humano, instalado por una app) antes de construir el DataFrame. Limitación
+conocida: no es 100% preciso — 2 de las 176 saved searches de sistema en la
+prueba (de la app `audit_trail`) tenían `owner="admin"` en vez de `"nobody"`
+y sobrevivieron al filtro; el impacto práctico es mínimo (aparecen como
+"datasets" fantasma con 0 GB/día, invisibles en cualquier reporte real) pero
+queda documentado como limitación aceptada, no como bug pendiente.
+
 **Permisos:** requiere capacidad `list_settings`/acceso de lectura a saved
 searches; para ver saved searches de *otros* usuarios/apps se requiere
 típicamente un rol con `search` amplio o admin, dependiendo de los permisos
@@ -188,9 +207,25 @@ models se marca `UNKNOWN` y nunca `POSSIBLE_WASTE` (ver DECISIONS.md D006).
 
 ## 5. `metadata` command
 
-**Qué entrega:** `| metadata type=sourcetypes index=*` da, por índice, la
-lista de sourcetypes presentes y sus timestamps de primer/último evento —
-**no** da bytes ingeridos ni uso.
+**Qué entrega:** `| metadata type=sourcetypes index=X` da la lista de
+sourcetypes presentes en el/los índice(s) filtrados por `index=`, con sus
+timestamps de primer/último evento — **no** da bytes ingeridos ni uso.
+
+**Corrección Fase 3A — hecho verificado contra Splunk Enterprise 10.4.3
+real [HECHO, invalida una afirmación de Fase 2]:** `metadata type=sourcetypes`
+**no tiene una dimensión `index` en su salida.** Sus únicos campos son
+`sourcetype`, `firstTime`, `lastTime`, `recentTime`, `totalCount`, `type`. El
+parámetro `index=` (incluso con wildcard, `index=*`) solo **filtra** qué
+índices se incluyen en el cómputo — no produce un desglose por índice. Si dos
+índices distintos comparten el mismo valor de `sourcetype`, sus tiempos
+quedan agregados en una sola fila sin forma de atribuir cada uno a su índice.
+La query original de Fase 2 (`queries/metadata_last_seen.spl`) asumía
+incorrectamente que existía un campo `index` en esa salida; en la práctica
+producía una columna `index` vacía en el 100% de los casos, de forma
+silenciosa (sin error, sin warning). **Corregido** ejecutando `metadata` una
+vez por índice vía `| map` e inyectando el valor real del índice con
+`eval index="$index$"` — ver el archivo `.spl` actualizado y DECISIONS.md
+D011.
 
 **Uso en este producto:** como fuente complementaria de "última vez que se vio
 un evento de este sourcetype" (`recentTime`), útil para distinguir un dataset
@@ -199,6 +234,13 @@ inactivo (ya no ingiere) de uno activo pero no buscado. No reemplaza a
 
 **Permisos/compatibilidad:** igual que cualquier búsqueda normal sobre los
 índices del cliente — no requiere acceso especial a `_internal`/`_audit`.
+
+**Costo/riesgo de performance [HECHO, confirmado en Fase 3A]:** al correr
+`metadata` una vez por índice vía `map`, el costo crece linealmente con el
+número de índices distintos del entorno, no con el volumen de eventos —
+bajo para el rango típico de este producto (decenas a un par de cientos de
+índices). `map` tiene un límite de `maxsearches` (100 en la query actual);
+entornos con más de 100 índices necesitan subir ese límite explícitamente.
 
 ---
 
