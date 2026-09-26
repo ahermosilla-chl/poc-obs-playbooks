@@ -1,0 +1,18 @@
+``` Log Spend Auditor — ingest_by_host.spl
+Fuente: docs/splunk-data-sources.md, sección 1.
+
+ADVERTENCIA (leer antes de usar): el desglose por host está sujeto a
+"squashing" quando el número de tuplas (source, sourcetype, host, index)
+supera squash_threshold — en ese caso Splunk descarta el valor de host para
+esos eventos y este query subestimará el consumo real por host. Ver
+DECISIONS.md D004. Esta query es INFORMATIVA solamente — el motor de scoring
+nunca la usa como base de clasificación.
+```
+
+index=_internal source=*license_usage.log type="Usage"
+earliest=-30d@d latest=now
+| eval hostname=if(len(h)=0 OR isnull(h),"(SQUASHED_OR_UNKNOWN)",h)
+| stats sum(b) as bytes by hostname
+| eval gb_total=round(bytes/1024/1024/1024, 3)
+| table hostname, gb_total
+| sort - gb_total

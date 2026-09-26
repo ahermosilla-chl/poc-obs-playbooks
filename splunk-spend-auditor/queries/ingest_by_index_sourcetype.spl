@@ -1,0 +1,27 @@
+``` Log Spend Auditor — ingest_by_index_sourcetype.spl
+Fuente: docs/splunk-data-sources.md, sección 1 (license_usage.log)
+
+Qué produce: GB/día ingerido por cada par (index, sourcetype), agregado por
+día, en los últimos N días (por defecto 90). Esta es la ÚNICA unidad
+garantizada como completa por Splunk (no sufre "squashing"): ver
+docs/splunk-data-sources.md para el detalle de por qué host/source no lo
+están.
+
+Permisos requeridos: acceso al índice _internal + capacidad "search".
+No requiere rol admin.
+
+Export a CSV: guarda el resultado como sample-data/schema/ingest_by_index_sourcetype.csv
+(mismo esquema que espera el CSVCollector: date, index, sourcetype, gb).
+```
+
+index=_internal source=*license_usage.log type="Usage"
+earliest=-90d@d latest=now
+| eval indexname=if(len(idx)=0 OR isnull(idx),"(UNKNOWN)",idx)
+| eval sourcetypename=if(len(st)=0 OR isnull(st),"(UNKNOWN)",st)
+| bin _time span=1d
+| stats sum(b) as bytes by _time, indexname, sourcetypename
+| eval gb=round(bytes/1024/1024/1024, 4)
+| eval date=strftime(_time, "%Y-%m-%d")
+| table date, indexname, sourcetypename, gb
+| rename indexname as index, sourcetypename as sourcetype
+| sort date, index, sourcetype

@@ -1,0 +1,30 @@
+``` Log Spend Auditor — audit_interactive_searches.spl
+Fuente: docs/splunk-data-sources.md, sección 2 (_audit).
+
+Qué produce: una fila por búsqueda interactiva (excluye scheduler, typeahead,
+history, usuario de sistema), con el texto SPL completo para que el parser de
+Log Spend Auditor extraya index=/sourcetype= con su nivel de confianza
+(docs/scoring.md sección 3).
+
+Permisos requeridos: acceso al índice _audit + capacidad "search".
+
+ADVERTENCIA: el campo `search` puede faltar o venir vacío en algunas
+configuraciones (ver docs/splunk-data-sources.md, restricciones conocidas de
+_audit). Si una fila viene con search vacío, el CSVCollector la marca como
+UNKNOWN, no como "sin actividad".
+
+Export a CSV: sample-data/schema/audit_searches.csv
+(esquema: date, user, search_id, is_scheduled, search_text)
+```
+
+index=_audit action=search info=granted search=*
+earliest=-90d@d latest=now
+NOT "user=splunk-system-user"
+NOT "search='|history"
+NOT "search='typeahead"
+NOT "search='| metadata type=* | search totalCount>0"
+| eval is_scheduled=if(match(search_id, "^scheduler"), "true", "false")
+| eval date=strftime(_time, "%Y-%m-%d")
+| table date, user, search_id, is_scheduled, search
+| rename search as search_text
+| sort date

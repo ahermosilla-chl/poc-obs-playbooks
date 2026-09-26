@@ -1,0 +1,4 @@
+name,search_text,is_scheduled,cron_schedule,has_alert_action,next_scheduled_time
+SNMP Trap Storm Alert,index=network sourcetype=snmp_traps | stats count by trap_oid | where count > 100,true,*/10 * * * *,true,2026-09-26T12:10:00
+Daily Firewall Traffic Report,index=cdn sourcetype=edge_access | stats count by action,true,0 6 * * *,false,2026-09-27T06:00:00
+Failed Logon Report,index=windows sourcetype=eventlog EventCode=4625 | stats count by user,true,0 7 * * *,false,2026-09-27T07:00:00

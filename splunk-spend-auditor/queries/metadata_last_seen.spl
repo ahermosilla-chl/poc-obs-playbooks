@@ -1,0 +1,17 @@
+``` Log Spend Auditor — metadata_last_seen.spl
+Fuente: docs/splunk-data-sources.md, sección 5 (comando metadata).
+
+Qué produce: para cada (index, sourcetype), hace cuántos días se vio el
+último evento indexado. NO da bytes ni uso — es la señal de "actividad de
+ingest", complementaria al volumen (license_usage.log) y al uso
+(_audit/saved searches). Se usa para poblar last_seen_days_ago.
+
+No requiere acceso a _internal ni _audit — corre sobre los índices normales
+del cliente.
+```
+
+| metadata type=sourcetypes index=*
+| eval last_seen_days_ago=round((now()-recentTime)/86400, 1)
+| eval index=split(index, "~")
+| table index, sourcetype, last_seen_days_ago
+| sort - last_seen_days_ago

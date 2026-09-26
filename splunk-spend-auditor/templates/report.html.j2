@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Splunk Spend Audit</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #5f6b7a; --border: #e2e6ea;
+    --accent: #0b5fff; --waste: #b3261e; --review: #b06d00; --high: #1a7f37;
+    --protected: #6e5aa6; --unknown: #5f6b7a; --normal: #3a4750;
+  }
+  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+         color: var(--fg); background: var(--bg); max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.5; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.2rem; }
+  h2 { font-size: 1.15rem; margin-top: 2.2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  .subtitle { color: var(--muted); margin-top: 0; }
+  .summary-box { background: #f6f8fa; border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.2rem; margin: 1rem 0 1.5rem; }
+  .summary-box p { margin: 0.3rem 0; }
+  table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.4rem; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  tr:hover { background: #fafbfc; }
+  .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; color: #fff; }
+  .badge-POSSIBLE_WASTE { background: var(--waste); }
+  .badge-REVIEW { background: var(--review); }
+  .badge-HIGH_VALUE { background: var(--high); }
+  .badge-PROTECTED { background: var(--protected); }
+  .badge-UNKNOWN { background: var(--unknown); }
+  .badge-NORMAL { background: var(--normal); }
+  .candidate-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem 1.1rem; margin-bottom: 0.9rem; }
+  .candidate-card h3 { margin: 0 0 0.3rem; font-size: 1rem; }
+  .candidate-meta { color: var(--muted); font-size: 0.88rem; margin: 0.3rem 0; }
+  .candidate-explanation { margin: 0.5rem 0; }
+  .candidate-recommendation { font-weight: 600; }
+  .risk-box, .methodology-box { background: #fff8ec; border: 1px solid #f1d9a0; border-radius: 8px; padding: 1rem 1.2rem; font-size: 0.92rem; }
+  .methodology-box { background: #f6f8fa; border-color: var(--border); }
+  .footer-note { color: var(--muted); font-size: 0.82rem; margin-top: 2.5rem; }
+  code { background: #f0f2f5; padding: 0.1rem 0.3rem; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Splunk Spend Audit</h1>
+<p class="subtitle">Generated {{ generated_at }} — Log Spend Auditor v{{ tool_version }} ({{ tier | upper }})</p>
+
+<h2>Executive Summary</h2>
+<div class="summary-box">
+  <p>Your Splunk environment ingests <strong>{{ current_ingest_gb_day }} GB/day</strong>
+     across {{ total_datasets }} (index, sourcetype) datasets.</p>
+  <p>Of that, <strong>{{ savings.candidate_gb_day }} GB/day</strong>
+     ({{ (savings.potential_reduction_pct * 100) | round(1) }}%) are flagged as
+     optimization candidates with low or no observed usage.</p>
+  {% if savings.potential_annual_saving is not none %}
+  <p>Based on
+     {% if savings.annual_spend_input is not none %}
+     an estimated annual spend of <strong>${{ "{:,.0f}".format(savings.annual_spend_input) }}</strong>,
+     {% else %}
+     the cost-per-GB/day you provided,
+     {% endif %}
+     this represents a <strong>potential annual saving of around
+     ${{ "{:,.0f}".format(savings.potential_annual_saving) }}</strong>.</p>
+  {% endif %}
+  <p><em>This is a potential saving, not a guaranteed one — see "Risk Considerations" below.</em></p>
+</div>
+
+<h2>Current Spend</h2>
+<table>
+  <tr><th>Current ingest</th><td>{{ current_ingest_gb_day }} GB/day</td></tr>
+  {% if savings.annual_spend_input is not none %}
+  <tr><th>Estimated annual spend (input)</th><td>${{ "{:,.0f}".format(savings.annual_spend_input) }}</td></tr>
+  {% elif savings.cost_per_gb_day_input is not none %}
+  <tr><th>Cost per GB/day (input)</th><td>${{ savings.cost_per_gb_day_input }}</td></tr>
+  {% else %}
+  <tr><th>Spend estimate</th><td>Not provided — showing volume/percentage only</td></tr>
+  {% endif %}
+  <tr><th>High-ingest threshold (this environment, p75)</th><td>{{ high_ingest_threshold_gb }} GB/day</td></tr>
+</table>
+
+<h2>Ingestion Breakdown</h2>
+<table>
+  <tr><th>Dataset</th><th>GB/day</th><th>% of total</th></tr>
+  {% for row in ingestion_breakdown %}
+  <tr><td><code>{{ row.name }}</code></td><td>{{ row.gb_per_day }}</td><td>{{ row.pct_of_total }}%</td></tr>
+  {% endfor %}
+</table>
+{% if ingestion_breakdown_truncated %}
+<p class="footer-note">Showing top {{ ingestion_breakdown | length }} of {{ total_datasets }} datasets.
+{% if tier == "free" %}Upgrade to the full report to see all datasets.{% endif %}</p>
+{% endif %}
+
+{% if usage_analysis %}
+<h2>Usage Analysis</h2>
+<table>
+  <tr><th>Dataset</th><th>Searches 30d</th><th>Searches 90d</th><th>Scheduled</th><th>Alert</th><th>Dashboard</th><th>Users 30d</th><th>Last seen (days)</th><th>Confidence</th></tr>
+  {% for row in usage_analysis %}
+  <tr>
+    <td><code>{{ row.name }}</code></td>
+    <td>{{ row.searches_30d }}</td>
+    <td>{{ row.searches_90d }}</td>
+    <td>{{ "Yes" if row.is_scheduled else "No" }}</td>
+    <td>{{ "Yes" if row.has_alert else "No" }}</td>
+    <td>{{ "Yes" if row.used_in_dashboards else "No" }}</td>
+    <td>{{ row.unique_users_30d }}</td>
+    <td>{{ row.last_seen_days_ago if row.last_seen_days_ago is not none else "—" }}</td>
+    <td>{{ row.confidence }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>Top Optimization Candidates</h2>
+{% if top_candidates %}
+  {% for c in top_candidates %}
+  <div class="candidate-card">
+    <h3><code>{{ c.name }}</code> <span class="badge badge-{{ c.classification }}">{{ c.classification }}</span></h3>
+    <p class="candidate-meta">
+      Ingest: {{ c.gb_per_day }} GB/day ·
+      Searches 30d: {{ c.searches_30d }} ·
+      Searches 90d: {{ c.searches_90d }} ·
+      Scheduled: {{ "Yes" if c.is_scheduled else "No" }} ·
+      Alerts: {{ "Yes" if c.has_alert else "No" }} ·
+      Dashboards: {{ "Yes" if c.used_in_dashboards else "No" }}
+      {% if c.last_seen_days_ago is not none %} · Last observed: {{ c.last_seen_days_ago }} days ago{% endif %}
+    </p>
+    <p class="candidate-explanation">{{ c.explanation }}</p>
+    <p class="candidate-recommendation">Recommendation: {{ c.recommendation }}</p>
+  </div>
+  {% endfor %}
+  {% if candidates_truncated %}
+  <p class="footer-note">Showing top {{ top_candidates | length }} candidates.
+     {% if tier == "free" %}Upgrade to the full report to see all candidates.{% endif %}</p>
+  {% endif %}
+{% else %}
+  <p>No optimization candidates were found with the current thresholds.</p>
+{% endif %}
+
+{% if all_datasets_detail %}
+<h2>Indexes / Sourcetypes (full detail)</h2>
+<table>
+  <tr><th>Dataset</th><th>GB/day</th><th>Classification</th><th>Data Value Score</th></tr>
+  {% for row in all_datasets_detail %}
+  <tr>
+    <td><code>{{ row.name }}</code></td>
+    <td>{{ row.gb_per_day }}</td>
+    <td><span class="badge badge-{{ row.classification }}">{{ row.classification }}</span></td>
+    <td>{{ row.score }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>Potential Savings</h2>
+<table>
+  <tr><th>Current ingest</th><td>{{ savings.current_ingest_gb_day }} GB/day</td></tr>
+  <tr><th>Possible waste</th><td>{{ savings.possible_waste_gb_day }} GB/day</td></tr>
+  <tr><th>Review candidates (weighted ×{{ review_weight }})</th><td>{{ savings.review_gb_day }} GB/day</td></tr>
+  <tr><th>Total optimization candidate volume</th><td>{{ savings.candidate_gb_day }} GB/day</td></tr>
+  <tr><th>Potential reduction</th><td>{{ (savings.potential_reduction_pct * 100) | round(1) }}%</td></tr>
+  {% if savings.potential_annual_saving is not none %}
+  <tr><th>Potential annual saving</th><td>${{ "{:,.0f}".format(savings.potential_annual_saving) }}</td></tr>
+  {% endif %}
+</table>
+
+<h2>Risk Considerations</h2>
+<div class="risk-box">
+  <p>These figures are estimates based on Splunk metadata (ingest volume and
+     search/alert/dashboard activity), <strong>not a financial audit</strong>.</p>
+  <p>Datasets classified as <span class="badge badge-PROTECTED">PROTECTED</span>
+     were deliberately excluded from optimization candidates, regardless of
+     their usage signals.</p>
+  <p>Datasets classified as <span class="badge badge-UNKNOWN">UNKNOWN</span>
+     are excluded from the savings calculation — we could not determine
+     their usage with high confidence, so we do not guess.</p>
+  {% if show_squashing_note %}
+  <p>This report analyzes usage at the (index, sourcetype) level only. Splunk's
+     license usage reporting can "squash" host and source breakdowns in
+     high-cardinality environments — see Methodology.</p>
+  {% endif %}
+  <p><strong>No action should be taken without manual validation by a Splunk
+     administrator and the team that owns each dataset.</strong></p>
+</div>
+
+<h2>Recommendations</h2>
+<ul>
+{% for r in recommendations %}
+  <li>{{ r }}</li>
+{% endfor %}
+</ul>
+
+<h2>Methodology</h2>
+<div class="methodology-box">
+  <p>Lookback window: {{ lookback_days }} days. Unit of analysis: (index, sourcetype)
+     — see Risk Considerations for why host/source are not used as a
+     classification basis.</p>
+  <p>Search-evidence coverage: {{ ((1 - partial_or_unknown_ratio) * 100) | round(1) }}%
+     of analyzed searches were parsed with high confidence
+     ({{ (partial_or_unknown_ratio * 100) | round(1) }}% were partial/unknown
+     and excluded from waste classification — see docs/scoring.md).</p>
+  <p>Data sources available in this run:</p>
+  <ul>
+  {% for source, available in sources_available.items() %}
+    <li><code>{{ source }}</code>: {{ "available" if available else "NOT available (degraded — see docs/architecture.md)" }}</li>
+  {% endfor %}
+  </ul>
+  <p>Generated by Log Spend Auditor v{{ tool_version }} on {{ generated_at }}.</p>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,4 @@
+# protected_overrides.txt
+# Un patrón por línea (index:sourcetype). Estos datasets nunca se
+# clasifican como POSSIBLE_WASTE sin importar sus señales de uso.
+dr:heartbeat_check

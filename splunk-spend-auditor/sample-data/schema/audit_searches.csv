@@ -1,0 +1,3 @@
+date,user,search_id,is_scheduled,search_text
+2026-09-01,jdoe,1758000001.123,false,index=main sourcetype=nginx status=500
+2026-09-01,system,scheduler_MyAlert_at_1758000000,true,index=main sourcetype=nginx | stats count

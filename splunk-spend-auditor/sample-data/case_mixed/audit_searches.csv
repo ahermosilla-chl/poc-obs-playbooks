@@ -1,0 +1,47 @@
+date,user,search_id,is_scheduled,search_text
+2026-07-28,oncall_engineer,1758000099.900,false,index=dr sourcetype=heartbeat_check | stats count
+2026-08-29,alice,1758000028.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-08-29,bob,1758000028.002,false,index=app sourcetype=login_events | stats count by user
+2026-08-29,erin,1758000028.005,false,index=infra sourcetype=syslog | timechart count
+2026-08-31,alice,1758000026.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-08-31,bob,1758000026.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-01,carol,1758000025.003,false,index=windows sourcetype=eventlog EventCode=4625
+2026-09-02,alice,1758000024.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-02,bob,1758000024.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-04,alice,1758000022.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-04,bob,1758000022.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-05,erin,1758000021.005,false,index=infra sourcetype=syslog | timechart count
+2026-09-06,alice,1758000020.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-06,bob,1758000020.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-06,carol,1758000020.003,false,index=windows sourcetype=eventlog EventCode=4625
+2026-09-06,dave,1758000020.004,false,`partner_feed_search` | stats count by status
+2026-09-08,alice,1758000018.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-08,bob,1758000018.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-10,alice,1758000016.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-10,bob,1758000016.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-11,carol,1758000015.003,false,index=windows sourcetype=eventlog EventCode=4625
+2026-09-12,alice,1758000014.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-12,bob,1758000014.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-12,erin,1758000014.005,false,index=infra sourcetype=syslog | timechart count
+2026-09-14,alice,1758000012.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-14,bob,1758000012.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-16,alice,1758000010.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-16,bob,1758000010.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-16,carol,1758000010.003,false,index=windows sourcetype=eventlog EventCode=4625
+2026-09-16,dave,1758000010.004,false,`partner_feed_search` | stats count by status
+2026-09-18,alice,1758000008.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-18,bob,1758000008.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-19,erin,1758000007.005,false,index=infra sourcetype=syslog | timechart count
+2026-09-20,alice,1758000006.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-20,bob,1758000006.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-21,carol,1758000005.003,false,index=windows sourcetype=eventlog EventCode=4625
+2026-09-22,alice,1758000004.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-22,bob,1758000004.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-24,alice,1758000002.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-24,bob,1758000002.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-25,system,scheduler_edge_access_daily_1758000000,true,index=cdn sourcetype=edge_access | stats count
+2026-09-26,alice,1758000000.001,false,index=cdn sourcetype=edge_access action=blocked | stats count by dest_ip
+2026-09-26,bob,1758000000.002,false,index=app sourcetype=login_events | stats count by user
+2026-09-26,carol,1758000000.003,false,index=windows sourcetype=eventlog EventCode=4625
+2026-09-26,dave,1758000000.004,false,`partner_feed_search` | stats count by status
+2026-09-26,erin,1758000000.005,false,index=infra sourcetype=syslog | timechart count

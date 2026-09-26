@@ -1,0 +1,21 @@
+``` Log Spend Auditor — ingest_trend_7d_30d.spl
+Fuente: docs/splunk-data-sources.md, sección 1.
+
+Qué produce: comparación de GB/día promedio de los últimos 7 días vs. los
+últimos 30 días, por (index, sourcetype) — para detectar datasets cuyo
+volumen está creciendo o cayendo, información complementaria para la sección
+"Ingestion Breakdown" del reporte (no determina la clasificación, solo da
+contexto de tendencia).
+```
+
+index=_internal source=*license_usage.log type="Usage"
+earliest=-30d@d latest=now
+| eval indexname=if(len(idx)=0 OR isnull(idx),"(UNKNOWN)",idx)
+| eval sourcetypename=if(len(st)=0 OR isnull(st),"(UNKNOWN)",st)
+| eval bucket=if(_time >= relative_time(now(), "-7d@d"), "last_7d", "prior_23d")
+| stats sum(b) as bytes by indexname, sourcetypename, bucket
+| eval gb=round(bytes/1024/1024/1024, 4)
+| eval days=if(bucket="last_7d", 7, 23)
+| eval gb_per_day=round(gb/days, 4)
+| stats list(bucket) as buckets list(gb_per_day) as gb_per_day_list by indexname, sourcetypename
+| rename indexname as index, sourcetypename as sourcetype

@@ -1,0 +1,2 @@
+name,search_text,is_scheduled,cron_schedule,has_alert_action,next_scheduled_time
+Nginx 5xx Alert,index=main sourcetype=nginx status=500,true,*/5 * * * *,true,2026-09-26T10:05:00

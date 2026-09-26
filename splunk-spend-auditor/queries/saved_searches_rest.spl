@@ -1,0 +1,23 @@
+``` Log Spend Auditor — saved_searches_rest.spl
+Fuente: docs/splunk-data-sources.md, sección 3 (REST API /saved/searches).
+
+Esta NO es una query SPL contra un índice de eventos — es una query sobre el
+endpoint REST de configuración, ejecutada vía el comando `| rest`. Se incluye
+aquí (en vez de solo en el collector Python) porque también se puede correr
+manualmente en Splunk Search para exportar a CSV en el modo manual.
+
+IMPORTANTE (ver docs/splunk-data-sources.md, gotcha de scoping): usar
+"/servicesNS/-/-/saved/searches" (wildcards de user y app), NO
+"/services/saved/searches", o se perderán las saved searches de otros
+usuarios/apps y se generarán falsos positivos de "sin uso".
+
+Export a CSV: sample-data/schema/saved_searches.csv
+(esquema: name, search_text, is_scheduled, cron_schedule, has_alert_action,
+next_scheduled_time)
+```
+
+| rest /servicesNS/-/-/saved/searches
+| table title, search, is_scheduled, cron_schedule, actions, next_scheduled_time
+| eval has_alert_action=if(len(actions)>0, "true", "false")
+| rename title as name, search as search_text
+| table name, search_text, is_scheduled, cron_schedule, has_alert_action, next_scheduled_time
