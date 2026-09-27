@@ -25,6 +25,7 @@ from splunk_spend_auditor.formatting import format_gb_per_day
 from splunk_spend_auditor.models import Classification
 from splunk_spend_auditor.reports.render import build_report_context, render_report
 from splunk_spend_auditor.scoring.classify_all import classify_all
+from splunk_spend_auditor.scoring.rules import REVIEW_WEIGHT
 from splunk_spend_auditor.scoring.savings import compute_savings
 
 app = typer.Typer(
@@ -179,12 +180,24 @@ def quickscan(
     )
 
     top5 = sorted(datasets, key=lambda d: d.ingest_gb_per_day, reverse=True)[:5]
-    candidates = [
-        d
-        for d in sorted(datasets, key=lambda d: d.ingest_gb_per_day, reverse=True)
-        if d.classification
-        in (Classification.POSSIBLE_WASTE, Classification.REVIEW)
-    ][:3]
+    # Fase 3C.2 (D019): antes se mezclaban POSSIBLE_WASTE y REVIEW en una
+    # sola lista "candidates" sumada sin peso -- distinto del full audit,
+    # que pesa REVIEW a REVIEW_WEIGHT (scoring/savings.py) y nunca los suma
+    # como si fueran lo mismo. Ahora se muestran por separado, y la única
+    # cifra "comparable a full audit" (volumen y % de candidatos de
+    # optimización) reutiliza `savings.candidate_gb_day`/
+    # `savings.potential_reduction_pct` -- el mismo objeto SavingsEstimate
+    # que ya calculó `_run_pipeline()` arriba, no un cálculo paralelo.
+    waste_candidates = sorted(
+        (d for d in datasets if d.classification == Classification.POSSIBLE_WASTE),
+        key=lambda d: d.ingest_gb_per_day,
+        reverse=True,
+    )
+    review_candidates = sorted(
+        (d for d in datasets if d.classification == Classification.REVIEW),
+        key=lambda d: d.ingest_gb_per_day,
+        reverse=True,
+    )
 
     typer.echo(f"Total ingest: {format_gb_per_day(sum(d.ingest_gb_per_day for d in datasets))}/day")
     typer.echo("")
@@ -192,20 +205,44 @@ def quickscan(
     for i, d in enumerate(top5, 1):
         typer.echo(f"  {i}. {d.key}  {format_gb_per_day(d.ingest_gb_per_day)}/day")
     typer.echo("")
-    if candidates:
-        candidate_gb = sum(d.ingest_gb_per_day for d in candidates)
-        pct = 100 * candidate_gb / (sum(d.ingest_gb_per_day for d in datasets) or 1)
+    if waste_candidates:
         typer.echo(
-            f"Review candidates (possible waste): {len(candidates)} datasets, "
-            f"{format_gb_per_day(candidate_gb)}/day ({pct:.1f}% of total)"
+            f"Possible waste: {len(waste_candidates)} "
+            f"{'dataset' if len(waste_candidates) == 1 else 'datasets'}, "
+            f"{format_gb_per_day(savings.possible_waste_gb_day)}/day"
         )
-        for d in candidates:
-            typer.echo(f"  - {d.key}  {d.classification.value}  {format_gb_per_day(d.ingest_gb_per_day)}/day")
-    else:
+        for d in waste_candidates[:3]:
+            typer.echo(f"  - {d.key}  POSSIBLE_WASTE  {format_gb_per_day(d.ingest_gb_per_day)}/day")
+    if review_candidates:
+        typer.echo(
+            f"Review (manual validation recommended): {len(review_candidates)} "
+            f"{'dataset' if len(review_candidates) == 1 else 'datasets'}, "
+            f"{format_gb_per_day(savings.review_gb_day)}/day"
+        )
+        for d in review_candidates[:3]:
+            typer.echo(f"  - {d.key}  REVIEW  {format_gb_per_day(d.ingest_gb_per_day)}/day")
+    if not waste_candidates and not review_candidates:
         typer.echo("No optimization candidates found with the current thresholds.")
+    if waste_candidates or review_candidates:
+        typer.echo("")
+        typer.echo(
+            f"Optimization candidate volume (possible waste + review, weighted "
+            f"x{REVIEW_WEIGHT} -- same calculation as full audit): "
+            f"{format_gb_per_day(savings.candidate_gb_day)}/day "
+            f"({savings.potential_reduction_pct * 100:.1f}% of total)"
+        )
     typer.echo("")
     _echo_degradation_notice(summary)
-    typer.echo("Generate Full Spend Audit -> run `splunk-spend-auditor audit --from-csv ...`")
+    if host:
+        typer.echo(
+            f"Generate Full Spend Audit -> run "
+            f"`splunk-spend-auditor audit --host {host} --port {port}`"
+        )
+    else:
+        typer.echo(
+            f"Generate Full Spend Audit -> run "
+            f"`splunk-spend-auditor audit --from-csv {from_csv}`"
+        )
 
 
 @app.command()

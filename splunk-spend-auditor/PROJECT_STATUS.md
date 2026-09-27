@@ -1,18 +1,17 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 3C.1 (correcciones de honestidad
-semántica sobre la Fase 3C)
+Última actualización: cierre de Fase 3C.2 (consistencia final de outputs)
 
 ## Estado actual
 
-**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C y 3C.1 completadas.**
-El MVP técnico (Fase 2) está construido, probado y validado end-to-end
-contra un escenario sintético. Fase 3A validó ese mismo diseño contra una
-instancia Splunk Enterprise real y encontró y corrigió 3 bugs reales
-(D010/D011/D012). Fase 3B endureció el pipeline completo contra pérdida de
-señales y errores REST reales, y encontró y corrigió un bug de seguridad
-crítico (D014). D015 (único blocker de Fase 3B) se resolvió con un
-preflight determinista de autorización. Fase 3C ejecutó el producto
+**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C, 3C.1 y 3C.2
+completadas.** El MVP técnico (Fase 2) está construido, probado y validado
+end-to-end contra un escenario sintético. Fase 3A validó ese mismo diseño
+contra una instancia Splunk Enterprise real y encontró y corrigió 3 bugs
+reales (D010/D011/D012). Fase 3B endureció el pipeline completo contra
+pérdida de señales y errores REST reales, y encontró y corrigió un bug de
+seguridad crítico (D014). D015 (único blocker de Fase 3B) se resolvió con
+un preflight determinista de autorización. Fase 3C ejecutó el producto
 end-to-end contra Splunk real (quickscan + audit + HTML + Markdown),
 verificó los números contra la fuente y encontró y corrigió 3 bugs reales
 de precisión numérica (D016) más un problema de ruido en el reporte
@@ -20,8 +19,11 @@ de precisión numérica (D016) más un problema de ruido en el reporte
 generado presentaba tres inconsistencias semánticas (señal de dashboards
 mostrada como "No" cuando nunca se evaluó, etiqueta de `last_seen`
 ambigua, procedencia del annual spend poco clara) -- todas corregidas en
-Fase 3C.1 (D018), sin reabrir ninguna decisión de clasificación ya
-tomada. Ver sección "Fase 3C.1" abajo.
+Fase 3C.1 (D018). Una revisión posterior de los artefactos finales (Fase
+3C.2, D019) encontró 5 inconsistencias adicionales entre secciones del
+mismo reporte y entre `quickscan`/`audit` -- todas corregidas sin tocar
+`scoring/rules.py` (verificado explícitamente que ninguna era un bug de
+clasificación). Ver sección "Fase 3C.2" abajo.
 
 ## Fase 3C — Real Reporting Validation (COMPLETADA)
 
@@ -176,6 +178,64 @@ sin depender de Splunk/Docker/red real.
 para `saved_searches`/`list_settings` (sigue documentado como pendiente,
 no apareció como bug reproducible durante 3C.1); CSV export (sigue sin
 implementar); ninguna fase comercial/SaaS/de publicación.
+
+## Fase 3C.2 — Final Output Consistency (COMPLETADA)
+
+**Veredicto recibido:** revisión externa de los artefactos finales de Fase
+3C.1 (no una revisión técnica del código) encontró 5 inconsistencias entre
+secciones del mismo reporte y entre `quickscan`/`audit`. Iteración corta y
+dirigida, sin avance de fase ni refactors.
+
+**Baseline confirmado antes de modificar:** 135 tests passing (exacto,
+como se esperaba desde el cierre de Fase 3C.1).
+
+**1. Contador "Signals available" inconsistente con Methodology.**
+"Signals available: 6 of 6" en Current Environment contaba
+`NOT_APPLICABLE` (dashboards_used, protected_overrides) como "disponible"
+-- mientras Methodology, en el mismo reporte, las listaba como "not
+applicable for this run". Corregido: el contador ahora excluye
+`NOT_APPLICABLE` del denominador ("4 of 4 applicable to this run") y
+agrega una fila explícita "Signals not applicable".
+
+**2. Columna "Confidence" ambigua.** `lsa_waste` mostraba
+`Confidence: UNKNOWN` en la misma fila que `POSSIBLE_WASTE`, leíble como
+incertidumbre sobre la clasificación. Verificado por inspección directa
+de `scoring/rules.py`: `parser_confidence` no participa en `classify()`
+ni en `data_value_score()` -- es puramente confianza de evidencia de
+búsqueda/parsing SPL. Sin bug de lógica. Renombrado el encabezado a
+"Search evidence confidence" en ambos templates.
+
+**3. quickscan mezclaba POSSIBLE_WASTE y REVIEW sin peso.** Daba un número
+distinto al full audit para "lo mismo" (879 KB/64.7% vs. 877 KB/64.6%).
+Corregido: `quickscan` ahora lista ambas categorías por separado y
+reutiliza literalmente el mismo `SavingsEstimate` que ya calculaba
+`_run_pipeline()` para la cifra comparable -- no puede volver a divergir.
+
+**4. CTA de quickscan hardcodeado a `--from-csv`.** Una corrida REST
+terminaba sugiriendo `audit --from-csv ...`. Corregido: el CTA ahora usa
+`--host`/`--port` o `--from-csv <dir>` según el modo real de esta corrida.
+
+**5. "(PRO)" en el reporte.** Free/Pro es una hipótesis de producto sin
+validar. Eliminado el label de ambos templates; el sistema de tiers en sí
+no cambió.
+
+Ver DECISIONS.md D019 para el detalle completo de cada punto.
+
+**Regenerado quickscan + audit reales** contra `splunk-lab` (mismos 7
+datasets, modo REST, token admin) para confirmar las 5 correcciones
+end-to-end -- ver informe entregado al usuario al cierre de esta
+iteración para el detalle completo (Executive Summary, Current
+Environment, fila `lsa_waste`, quickscan completo, paths de los archivos).
+
+**Tests:** 145 passing (135 baseline + 10 nuevos: `tests/test_cli.py`
+nuevo con 4 tests -- primer test de la CLI en el proyecto --,
+`TestSignalAvailableCounterExcludesNotApplicable` (2),
+`TestConfidenceColumnLabelIsUnambiguous` (2),
+`TestNoProductTierLabelInReport` (2)). Cero regresiones. CI sigue sin
+depender de Splunk/Docker/red real.
+
+**Explícitamente NO tocado:** `scoring/rules.py` (verificado sin bug en
+los 5 puntos); lógica de truncamiento free/pro; ninguna fase posterior.
 
 ## Pendientes reales (no triviales)
 

@@ -42,7 +42,7 @@
 <body>
 
 <h1>Splunk Spend Audit</h1>
-<p class="subtitle">Generated {{ generated_at }} — Log Spend Auditor v{{ tool_version }} ({{ tier | upper }})</p>
+<p class="subtitle">Generated {{ generated_at }} — Log Spend Auditor v{{ tool_version }}</p>
 
 <h2>Executive Summary</h2>
 <div class="summary-box">
@@ -71,9 +71,12 @@
   {% if source_label %}<tr><th>Data source</th><td>{{ source_label }}</td></tr>{% endif %}
   <tr><th>Audit generated</th><td>{{ generated_at }}</td></tr>
   <tr><th>Lookback window</th><td>{{ lookback_days }} days</td></tr>
-  <tr><th>Signals available</th><td>{{ sources_available_display | rejectattr("degraded") | list | length }} of {{ sources_available_display | length }}</td></tr>
+  <tr><th>Signals available</th><td>{{ available_signal_count }} of {{ applicable_signal_count }} applicable to this run</td></tr>
   {% if reduced_confidence %}
   <tr><th>Signals degraded</th><td>{{ degraded_signal_names | join(", ") }} — see Methodology</td></tr>
+  {% endif %}
+  {% if has_not_applicable_signals %}
+  <tr><th>Signals not applicable</th><td>{{ not_applicable_signal_names | join(", ") }} — see Methodology</td></tr>
   {% endif %}
 </table>
 
@@ -105,7 +108,7 @@
 {% if usage_analysis %}
 <h2>Usage Analysis</h2>
 <table>
-  <tr><th>Dataset</th><th>Searches 30d</th><th>Searches 90d</th><th>Scheduled</th><th>Alert</th><th>Dashboard</th><th>Users 30d</th><th>Last data observed (days)</th><th>Confidence</th></tr>
+  <tr><th>Dataset</th><th>Searches 30d</th><th>Searches 90d</th><th>Scheduled</th><th>Alert</th><th>Dashboard</th><th>Users 30d</th><th>Last data observed (days)</th><th>Search evidence confidence</th></tr>
   {% for row in usage_analysis %}
   <tr>
     <td><code>{{ row.name }}</code></td>

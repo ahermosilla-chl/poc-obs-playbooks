@@ -1,6 +1,6 @@
 # Splunk Spend Audit
 
-_Generated {{ generated_at }} — Log Spend Auditor v{{ tool_version }} ({{ tier | upper }})_
+_Generated {{ generated_at }} — Log Spend Auditor v{{ tool_version }}_
 
 ## Executive Summary
 
@@ -26,8 +26,9 @@ _This is a potential saving, not a guaranteed one — see "Risk Considerations".
 {% if source_label %}| Data source | {{ source_label }} |
 {% endif %}| Audit generated | {{ generated_at }} |
 | Lookback window | {{ lookback_days }} days |
-| Signals available | {{ sources_available_display | rejectattr("degraded") | list | length }} of {{ sources_available_display | length }} |
+| Signals available | {{ available_signal_count }} of {{ applicable_signal_count }} applicable to this run |
 {% if reduced_confidence %}| Signals degraded | {{ degraded_signal_names | join(", ") }} — see Methodology |
+{% endif %}{% if has_not_applicable_signals %}| Signals not applicable | {{ not_applicable_signal_names | join(", ") }} — see Methodology |
 {% endif %}
 
 ## Current Spend
@@ -59,7 +60,7 @@ _Showing top {{ ingestion_breakdown | length }} of {{ total_datasets }} datasets
 {% if usage_analysis %}
 ## Usage Analysis
 
-| Dataset | Searches 30d | Searches 90d | Scheduled | Alert | Dashboard | Users 30d | Last data observed (days) | Confidence |
+| Dataset | Searches 30d | Searches 90d | Scheduled | Alert | Dashboard | Users 30d | Last data observed (days) | Search evidence confidence |
 |---|---|---|---|---|---|---|---|---|
 {% for row in usage_analysis %}
 | `{{ row.name }}` | {{ row.searches_30d }} | {{ row.searches_90d }} | {{ "Yes" if row.is_scheduled else "No" }} | {{ "Yes" if row.has_alert else "No" }} | {{ row.dashboards_display }} | {{ row.unique_users_30d }} | {{ row.last_seen_days_ago if row.last_seen_days_ago is not none else "—" }} | {{ row.confidence }} |

@@ -5,6 +5,86 @@ una, para no volver a discutirlas desde cero en sesiones futuras.
 
 ---
 
+## D019 — Consistencia final de outputs: contador de señales, etiqueta de confianza, quickscan y tier
+
+**Contexto:** Fase 3C.2, revisión dirigida sobre los artefactos finales de
+Fase 3C.1. Cinco inconsistencias detectadas al inspeccionar el reporte y
+el quickscan como producto (no como código), todas corregidas sin tocar
+`scoring/rules.py` -- se verificó explícitamente que ninguna era un bug de
+clasificación antes de tocar nada.
+
+**1. "Signals available: 6 of 6" contradecía a Methodology.** El
+denominador de `sources_available_display | rejectattr("degraded")`
+contaba `NOT_APPLICABLE` como "no degradado" y por lo tanto como
+"disponible" -- mientras la sección Methodology, en el mismo reporte,
+listaba `dashboards_used`/`protected_overrides` como "not applicable for
+this run". Dos secciones del mismo documento afirmando cosas distintas
+sobre la misma señal. Corregido: `reports/render.py` ahora calcula
+`available_signal_count`/`applicable_signal_count` excluyendo
+`NOT_APPLICABLE` del denominador (`4 of 4 applicable to this run` en vez
+de `6 of 6`), y agrega una fila "Signals not applicable" explícita en
+Current Environment, consistente con Methodology.
+
+**2. Columna "Confidence" ambigua junto a POSSIBLE_WASTE.**
+`lsa_waste:app:verbose_debug` mostraba `Confidence: UNKNOWN` en la misma
+fila que se clasifica `POSSIBLE_WASTE`, leíble como si el motor no
+estuviera seguro de la clasificación. Verificado por inspección directa
+de `scoring/rules.py` (ya hecho una vez en D018 para `last_seen`, repetido
+aquí para `parser_confidence`): **ningún** uso de `parser_confidence`
+existe en `classify()` ni en `data_value_score()` -- la columna es
+puramente confianza de evidencia de búsqueda/parsing SPL (docs/scoring.md
+sección 3), un concepto completamente distinto de la clasificación final.
+No había bug de lógica que corregir -- solo se renombró el encabezado a
+"Search evidence confidence" en ambos templates.
+
+**3. quickscan mezclaba POSSIBLE_WASTE y REVIEW sin peso.** `quickscan`
+sumaba ambas categorías en una sola cifra ("Review candidates (possible
+waste): 2 datasets, 879 KB/day, 64.7%"), mientras el full audit
+(`compute_savings()`) pesa REVIEW a `REVIEW_WEIGHT=0.5` y nunca los trata
+como equivalentes -- los dos comandos daban números distintos (879 KB/64.7%
+vs. 877 KB/64.6%) para "lo mismo". Corregido: `quickscan` ahora lista
+POSSIBLE_WASTE y REVIEW como bloques separados (con su volumen real, sin
+peso, para cada uno) y reutiliza literalmente `savings.candidate_gb_day` /
+`savings.potential_reduction_pct` -- el mismo objeto `SavingsEstimate` que
+`_run_pipeline()` ya calculaba -- para la única cifra "comparable a full
+audit", en vez de una suma paralela hecha a mano en `cli.py`. Por
+construcción, ambos comandos no pueden volver a divergir en ese número.
+
+**4. quickscan en modo REST sugería `audit --from-csv ...`.** El CTA final
+de `quickscan` estaba hardcodeado a `--from-csv`, incluso corriendo contra
+Splunk real vía REST. Corregido: el CTA ahora usa `--host`/`--port` cuando
+la corrida fue REST, `--from-csv <dir>` cuando fue CSV -- refleja el
+origen real de esta ejecución (`cli.py` ya tenía `host`/`from_csv`
+disponibles en el mismo scope, no se agregó estado nuevo).
+
+**5. "(PRO)" en el reporte.** Free/Pro es una hipótesis de producto sin
+validar (ver `docs/product-spec.md`, pendiente de Fase 3C.1/PROJECT_STATUS.md
+"Pendientes reales"). Mostrar "(PRO)" en el subtítulo del reporte lo
+presentaba como un hecho de producto ya decidido. Se eliminó el label de
+ambos templates -- el sistema de tiers en sí (qué contenido trunca `tier`)
+no cambió, solo se dejó de nombrarlo en el reporte visible.
+
+**Alcance deliberadamente NO tocado:** `scoring/rules.py` (confirmado sin
+bug en ninguno de los 5 puntos); la lógica de truncamiento free/pro;
+cualquier decisión de clasificación de fases anteriores.
+
+**Tests:** `tests/test_cli.py` (nuevo, 4 tests: separación
+POSSIBLE_WASTE/REVIEW, cifra comparable idéntica a `compute_savings()`,
+CTA por modo CSV/REST), `tests/test_report_render.py::TestSignalAvailableCounterExcludesNotApplicable`
+(2), `TestConfidenceColumnLabelIsUnambiguous` (2),
+`TestNoProductTierLabelInReport` (2).
+
+**Validación:** regenerado quickscan + audit reales contra `splunk-lab`
+(mismos 7 datasets, modo REST, token admin) -- confirmado en
+`/tmp/fase3c2_outputs/`: `Signals available: 4 of 4 applicable to this
+run` + `Signals not applicable: dashboards_used, protected_overrides`;
+"Search evidence confidence" como encabezado; quickscan separa "Possible
+waste: 1 dataset, 876 KB/day" de "Review (...): 1 dataset, 3 KB/day" y
+reporta "877 KB/day (64.6%)" -- idéntico al full audit; CTA
+`audit --host localhost --port 8089`; sin "(PRO)" en ningún archivo.
+
+---
+
 ## D018 — Honestidad de lenguaje para `dashboards_used`; `last_seen` renombrado; procedencia del annual spend explícita
 
 **Contexto:** Fase 3C.1, revisión dirigida sobre el reporte de Fase 3C

@@ -319,3 +319,93 @@ class TestLastSeenLabelDoesNotImplySearchActivity:
             if "days ago" in text or "Last" in text:
                 assert "Last data observed" in text
                 assert "Last observed" not in text
+
+
+class TestSignalAvailableCounterExcludesNotApplicable:
+    """Fase 3C.2 (D019): bug real -- "Signals available: 6 of 6" en Current
+    Environment contaba dashboards_used/protected_overrides (NOT_APPLICABLE,
+    nunca evaluadas en modo REST) como "disponibles", mientras Methodology
+    las listaba como "not applicable for this run" en la misma corrida --
+    una inconsistencia semántica directa entre dos secciones del mismo
+    reporte. El contador ahora excluye NOT_APPLICABLE del denominador."""
+
+    def test_not_applicable_signals_are_excluded_from_the_available_ratio(self):
+        datasets, summary, savings = _rest_like_environment_without_dashboards_signal()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+
+        # sources_available del fixture: 4 AVAILABLE, 2 NOT_APPLICABLE.
+        assert context["applicable_signal_count"] == 4
+        assert context["available_signal_count"] == 4
+        assert context["has_not_applicable_signals"] is True
+        assert "dashboards_used" in context["not_applicable_signal_names"]
+        assert "protected_overrides" in context["not_applicable_signal_names"]
+
+    def test_rendered_report_never_counts_not_applicable_as_available(self, tmp_path):
+        datasets, summary, savings = _rest_like_environment_without_dashboards_signal()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+        written = render_report(context, tmp_path, ["html", "md"])
+        for path in written.values():
+            text = path.read_text()
+            # El bug real: "6 of 6" -- ningún run con fuentes NOT_APPLICABLE
+            # debe decir "X of Y" con Y igual al total crudo de fuentes.
+            assert "4 of 6" not in text
+            assert "4 of 4" in text
+            assert "not applicable" in text.lower()
+
+
+class TestConfidenceColumnLabelIsUnambiguous:
+    """Fase 3C.2 (D019): "Confidence: UNKNOWN" junto a
+    "Classification: POSSIBLE_WASTE" podía leerse como si el motor no
+    estuviera seguro de la clasificación. Verificado (scoring/rules.py no
+    usa parser_confidence en absoluto, ni en classify() ni en
+    data_value_score()) que es puramente confianza de evidencia de
+    búsqueda/parsing SPL -- no de la clasificación. Se renombra el
+    encabezado, sin tocar scoring (no había bug de lógica)."""
+
+    def test_column_header_names_search_evidence_explicitly(self, tmp_path):
+        datasets, summary, savings = _classified()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+        written = render_report(context, tmp_path, ["html", "md"])
+        for path in written.values():
+            text = path.read_text()
+            assert "Search evidence confidence" in text
+
+    def test_classification_is_never_confused_with_a_bare_confidence_column(self):
+        """La clasificación de un dataset con parser_confidence=UNKNOWN debe
+        poder ser POSSIBLE_WASTE -- confirma que no hay acoplamiento de
+        lógica entre ambos conceptos (nunca se tocó classify())."""
+        from splunk_spend_auditor.scoring.rules import classify
+
+        ds = Dataset(
+            key=DatasetKey(index="idx", sourcetype="st"),
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            parser_confidence=ParserConfidence.UNKNOWN,
+        )
+        classification, _, _ = classify(ds, high_ingest_threshold_gb=20.0, environment_partial_unknown_ratio=0.05)
+        assert classification == Classification.POSSIBLE_WASTE
+
+
+class TestNoProductTierLabelInReport:
+    """Fase 3C.2 (D019): Free/Pro es una hipótesis de producto no validada
+    -- el reporte no debe mostrar "(PRO)"/"(FREE)" como si fuera un hecho
+    ya decidido. El sistema de tiers (qué contenido se trunca) no cambia,
+    solo se deja de nombrar la etiqueta comercial en el reporte visible."""
+
+    def test_rendered_report_does_not_show_tier_label(self, tmp_path):
+        datasets, summary, savings = _classified()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+        written = render_report(context, tmp_path, ["html", "md"])
+        for path in written.values():
+            text = path.read_text()
+            assert "(PRO)" not in text
+            assert "(FREE)" not in text
+
+    def test_free_tier_truncation_behavior_is_unchanged(self):
+        """El fix es solo de etiqueta -- el truncamiento real de free sigue
+        funcionando exactamente igual."""
+        datasets, summary, savings = _classified()
+        context = build_report_context(datasets, summary, savings, tier="free")
+        assert len(context["ingestion_breakdown"]) <= 5
+        assert len(context["top_candidates"]) <= 3
+        assert context["usage_analysis"] == []

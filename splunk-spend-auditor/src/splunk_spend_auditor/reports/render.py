@@ -195,10 +195,26 @@ def build_report_context(
             # más preciso que decir que la etiqueta genérica del estado.
             "label": summary.diagnostics.get(source) or _SIGNAL_STATUS_LABEL.get(status, status.value),
             "degraded": status in _DEGRADED_SIGNAL_STATES,
+            "not_applicable": status == SignalAvailability.NOT_APPLICABLE,
         }
         for source, status in summary.sources_available.items()
     ]
     degraded_signal_names = [row["source"] for row in sources_available_display if row["degraded"]]
+    # Fase 3C.2 (D019): "Signals available: X of Y" contaba NOT_APPLICABLE
+    # como "disponible" (solo excluía UNAVAILABLE/PARTIAL/ERROR) -- una
+    # fuente que nunca se evalúa por diseño (dashboards_used/
+    # protected_overrides en modo REST) no es lo mismo que una fuente
+    # confirmada. El contador ahora es "cuántas de las fuentes APLICABLES a
+    # este run están AVAILABLE" -- las NOT_APPLICABLE se excluyen del
+    # denominador y se listan aparte, consistente con lo que Methodology ya
+    # dice para cada una.
+    applicable_signals_display = [row for row in sources_available_display if not row["not_applicable"]]
+    available_signal_count = sum(
+        1 for row in applicable_signals_display if row["status"] == SignalAvailability.AVAILABLE.value
+    )
+    not_applicable_signal_names = [
+        row["source"] for row in sources_available_display if row["not_applicable"]
+    ]
 
     all_datasets_detail = [
         {
@@ -291,6 +307,10 @@ def build_report_context(
         "sources_available_display": sources_available_display,
         "reduced_confidence": bool(degraded_signal_names),
         "degraded_signal_names": degraded_signal_names,
+        "available_signal_count": available_signal_count,
+        "applicable_signal_count": len(applicable_signals_display),
+        "has_not_applicable_signals": bool(not_applicable_signal_names),
+        "not_applicable_signal_names": not_applicable_signal_names,
         "source_label": source_label,
         # Nota de squashing (docs/splunk-data-sources.md): en el MVP no se
         # analiza host/source, así que esta nota siempre se muestra como
