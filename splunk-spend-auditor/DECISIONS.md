@@ -5,6 +5,58 @@ una, para no volver a discutirlas desde cero en sesiones futuras.
 
 ---
 
+## D020 — Idioma de mensajes operacionales de la CLI: inglés, consistente con el resto del producto; precisión de "read-only" en docs/security.md
+
+**Contexto:** Fase 4A (evaluación de solo lectura de onboarding para
+testers externos) encontró, ejecutando los comandos reales, que los
+mensajes de error operacionales de la CLI (`_collect_from_source`,
+`_resolve_token`, y cada rama de `_describe_rest_error` en
+`rest_collector.py` -- connection refused, timeouts, 401/403/404/429/5xx,
+JSON malformado) estaban en español, mientras `--help`, el contenido de
+los reportes y los mensajes de éxito ya estaban en inglés. Para un tester
+externo angloparlante (el público objetivo, ver `docs/product-spec.md`),
+esto es fricción justo en el punto donde más necesita claridad: el primer
+intento fallido de conexión REST.
+
+**Decisión:** todos los mensajes que la CLI muestra por defecto (sin
+`--verbose`) -- validación de argumentos, errores de lectura de CSV, y las
+12 ramas de `_describe_rest_error` -- están ahora en inglés. **No** se
+tradujeron los `logger.debug()` internos (solo visibles con `--verbose`)
+ni los comentarios/docstrings del código: ambos son consistentes con el
+resto del código base (en español) y no son parte de la experiencia por
+defecto de un tester -- traducirlos habría sido alcance innecesario para
+una "iteración corta y dirigida".
+
+**Precisión adicional en `docs/security.md`:** el texto original decía que
+el modo REST "solo ejecuta GET/búsquedas de lectura", lo cual es
+técnicamente impreciso -- también usa `POST /services/search/jobs` en modo
+`oneshot` (así funciona la API de búsqueda de Splunk incluso para queries
+de solo lectura; `oneshot` ni siquiera deja un job persistente). Se
+corrigió a "operacionalmente read-only": ningún endpoint de
+escritura/borrado de configuración o datos se llama nunca (verificado por
+inspección directa de todos los métodos HTTP usados en
+`rest_collector.py` -- solo `GET` y ese único `POST` de búsqueda), pero
+"read-only" no es sinónimo de "solo HTTP GET".
+
+**Sin cambio de semántica de error handling:** mismas ramas de excepción,
+mismos códigos de salida, mismo comportamiento de `--verbose` -- solo
+cambió el texto mostrado.
+
+**Tests:** `tests/test_cli.py::TestCLIOperationalMessagesAreEnglish` (3,
+nuevo), `tests/test_rest_collector.py::TestDescribeRestErrorIsAlwaysEnglish`
+(12, nuevo, parametrizado sobre las 12 ramas de `_describe_rest_error`,
+verifica ausencia de caracteres acentuados/eñe como guarda de regresión
+simple y robusta sin mantener una lista de palabras en español). 4 tests
+existentes de `TestMandatoryIngestFailureBecomesRestCollectionError`
+actualizados de aserciones en español a inglés (mismo comportamiento
+verificado, distinto idioma esperado).
+
+**Validación contra el laboratorio real:** connection refused (puerto
+incorrecto) y 401 (token inválido) contra `splunk-lab` real -- ambos
+mensajes en inglés, claros, sin stack trace por defecto.
+
+---
+
 ## D019 — Consistencia final de outputs: contador de señales, etiqueta de confianza, quickscan y tier
 
 **Contexto:** Fase 3C.2, revisión dirigida sobre los artefactos finales de

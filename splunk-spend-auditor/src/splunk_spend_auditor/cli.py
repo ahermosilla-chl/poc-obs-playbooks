@@ -44,17 +44,17 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def _resolve_token(cli_verbose: bool) -> str:
-    """Nunca acepta el token como argumento de línea de comandos en texto
-    plano (docs/security.md) -- se lee de SPLUNK_TOKEN o se pide de forma
-    interactiva y oculta con getpass."""
+    """Never accepts the token as a plain-text CLI argument (docs/security.md)
+    -- it's read from SPLUNK_TOKEN or prompted interactively and hidden via
+    getpass."""
 
     token = os.environ.get("SPLUNK_TOKEN")
     if token:
         return token
     if not sys.stdin.isatty():
         typer.secho(
-            "Falta SPLUNK_TOKEN y no hay una terminal interactiva para pedirlo. "
-            "Define la variable de entorno SPLUNK_TOKEN.",
+            "SPLUNK_TOKEN is not set and there is no interactive terminal to "
+            "prompt for it. Set the SPLUNK_TOKEN environment variable.",
             fg=typer.colors.RED,
             err=True,
         )
@@ -70,16 +70,17 @@ def _collect_from_source(
     verify_ssl: bool,
     queries_dir: str,
 ) -> RawCollection:
-    """Decide qué collector usar según los flags -- ver DECISIONS.md D002.
-    Exactamente uno de --from-csv / --host debe darse; el CLI lo valida
-    antes de intentar nada contra Splunk."""
+    """Decides which collector to use based on the flags -- see
+    DECISIONS.md D002. Exactly one of --from-csv / --host must be given; the
+    CLI validates this before attempting anything against Splunk."""
 
     if from_csv and host:
-        typer.secho("Usa --from-csv o --host, no ambos.", fg=typer.colors.RED, err=True)
+        typer.secho("Use --from-csv or --host, not both.", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
     if not from_csv and not host:
         typer.secho(
-            "Se requiere --from-csv <directorio> (modo CSV) o --host <splunk-host> (modo REST).",
+            "Either --from-csv <directory> (CSV mode) or --host <splunk-host> "
+            "(REST mode) is required.",
             fg=typer.colors.RED,
             err=True,
         )
@@ -89,7 +90,7 @@ def _collect_from_source(
         try:
             return load_from_directory(from_csv)
         except FileNotFoundError as exc:
-            typer.secho(f"No se pudo leer el directorio de datos: {exc}", fg=typer.colors.RED, err=True)
+            typer.secho(f"Could not read the data directory: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from exc
 
     token = _resolve_token(cli_verbose=False)
@@ -97,8 +98,8 @@ def _collect_from_source(
     try:
         return collect_rest(config, queries_dir)
     except RestCollectionError as exc:
-        typer.secho(f"No se pudo completar la auditoría: {exc}", fg=typer.colors.RED, err=True)
-        typer.secho("Volvé a intentarlo con --verbose para ver el detalle técnico.", err=True)
+        typer.secho(f"Could not complete the audit: {exc}", fg=typer.colors.RED, err=True)
+        typer.secho("Try again with --verbose to see the technical detail.", err=True)
         raise typer.Exit(code=1) from exc
 
 

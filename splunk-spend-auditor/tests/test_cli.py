@@ -125,3 +125,34 @@ class TestQuickscanCTAReflectsActualSource:
         assert result.exit_code == 0, result.output
         assert "--from-csv" not in result.output
         assert "--host lab.example.com --port 8089" in result.output
+
+
+class TestCLIOperationalMessagesAreEnglish:
+    """Fase 4A.1 (D020): los mensajes de error operacionales de la CLI
+    estaban en español mientras el resto del producto (--help, reportes,
+    mensajes de éxito) está en inglés -- confuso para un tester externo
+    angloparlante justo en el punto donde más necesita claridad. Guarda de
+    regresión: ningún mensaje de validación de argumentos vuelve a
+    filtrarse en español."""
+
+    def test_missing_source_args_error_is_english(self):
+        result = runner.invoke(app, ["quickscan"])
+        assert result.exit_code != 0
+        assert "se requiere" not in result.output.lower()
+        assert "required" in result.output.lower()
+
+    def test_both_source_args_given_error_is_english(self, tmp_path):
+        result = runner.invoke(
+            app,
+            ["quickscan", "--from-csv", str(tmp_path), "--host", "lab.example.com"],
+        )
+        assert result.exit_code != 0
+        assert "ambos" not in result.output.lower()
+        assert "not both" in result.output.lower()
+
+    def test_missing_csv_directory_error_is_english(self, tmp_path):
+        missing_dir = tmp_path / "does-not-exist"
+        result = runner.invoke(app, ["quickscan", "--from-csv", str(missing_dir)])
+        assert result.exit_code != 0
+        assert "no se pudo" not in result.output.lower()
+        assert "could not read" in result.output.lower()

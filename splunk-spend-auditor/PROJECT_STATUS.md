@@ -1,29 +1,137 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 3C.2 (consistencia final de outputs)
+Última actualización: cierre de Fase 4A.1 (External Tester Preparation)
 
 ## Estado actual
 
-**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C, 3C.1 y 3C.2
-completadas.** El MVP técnico (Fase 2) está construido, probado y validado
-end-to-end contra un escenario sintético. Fase 3A validó ese mismo diseño
-contra una instancia Splunk Enterprise real y encontró y corrigió 3 bugs
-reales (D010/D011/D012). Fase 3B endureció el pipeline completo contra
-pérdida de señales y errores REST reales, y encontró y corrigió un bug de
-seguridad crítico (D014). D015 (único blocker de Fase 3B) se resolvió con
-un preflight determinista de autorización. Fase 3C ejecutó el producto
-end-to-end contra Splunk real (quickscan + audit + HTML + Markdown),
-verificó los números contra la fuente y encontró y corrigió 3 bugs reales
-de precisión numérica (D016) más un problema de ruido en el reporte
-(D017). La revisión de Fase 3C devolvió veredicto **MODIFY**: el reporte
-generado presentaba tres inconsistencias semánticas (señal de dashboards
-mostrada como "No" cuando nunca se evaluó, etiqueta de `last_seen`
-ambigua, procedencia del annual spend poco clara) -- todas corregidas en
-Fase 3C.1 (D018). Una revisión posterior de los artefactos finales (Fase
-3C.2, D019) encontró 5 inconsistencias adicionales entre secciones del
-mismo reporte y entre `quickscan`/`audit` -- todas corregidas sin tocar
-`scoring/rules.py` (verificado explícitamente que ninguna era un bug de
-clasificación). Ver sección "Fase 3C.2" abajo.
+**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C, 3C.1, 3C.2, 4A y
+4A.1 completadas.** El MVP técnico (Fase 2) está construido, probado y
+validado end-to-end contra un escenario sintético. Fase 3A validó ese
+mismo diseño contra una instancia Splunk Enterprise real (10.4.3, vía
+Docker) y encontró y corrigió 3 bugs reales (D010/D011/D012). Fase 3B
+endureció el pipeline completo contra pérdida de señales y errores REST
+reales, y encontró y corrigió un bug de seguridad crítico (D014). D015
+(único blocker de Fase 3B) se resolvió con un preflight determinista de
+autorización. Fase 3C ejecutó el producto end-to-end contra Splunk real
+(quickscan + audit + HTML + Markdown), verificó los números contra la
+fuente y encontró y corrigió 3 bugs reales de precisión numérica (D016)
+más un problema de ruido en el reporte (D017). La revisión de Fase 3C
+devolvió veredicto **MODIFY**: el reporte generado presentaba tres
+inconsistencias semánticas -- todas corregidas en Fase 3C.1 (D018). Una
+revisión posterior de los artefactos finales (Fase 3C.2, D019) encontró 5
+inconsistencias adicionales entre secciones del mismo reporte y entre
+`quickscan`/`audit` -- todas corregidas sin tocar `scoring/rules.py`
+(verificado explícitamente que ninguna era un bug de clasificación). Fase
+4A fue una evaluación de solo lectura (sin cambios de código) del
+onboarding para un tester externo, con veredicto **MINOR PREP REQUIRED**.
+Fase 4A.1 (D020) implementó esa preparación: mensajes operacionales de la
+CLI normalizados a inglés, README corregido y sin contradicciones
+internas, instalación mínima (`pip install -e .`, sin `[dev]`) verificada,
+y dos documentos nuevos entregables a un tester externo:
+`docs/splunk-permissions.md` y `docs/controlled-validation.md`. Ver
+sección "Fase 4A.1" abajo.
+
+## Fase 4A.1 — External Tester Preparation (COMPLETADA)
+
+**Objetivo:** implementar la preparación identificada como necesaria por
+Fase 4A (veredicto MINOR PREP REQUIRED) para 1-3 testers externos
+controlados -- sin agregar funcionalidad de producto, sin avanzar a
+SaaS/packaging público/PyPI/Docker/billing/licensing/Free-Pro/Elastic/IA.
+
+**Baseline confirmado antes de modificar:** 145 tests passing (exacto,
+como se esperaba desde el cierre de Fase 3C.2).
+
+**1. Idioma del CLI normalizado a inglés (D020).** Los mensajes de error
+operacionales (`_collect_from_source`, `_resolve_token`,
+`_describe_rest_error`) estaban en español mientras el resto del producto
+(`--help`, reportes, mensajes de éxito) está en inglés -- confirmado
+ejecutando los comandos reales. Traducidos todos los mensajes de:
+argumentos faltantes/ambos dados, directorio CSV no encontrado, y cada
+rama de `_describe_rest_error` (connection refused, timeout de conexión,
+timeout de lectura, error de red/TLS genérico, 401, 403, 404, 429, 5xx,
+JSON malformado, error inesperado). Sin cambio de semántica -- mismas
+ramas de excepción, mismos códigos de salida, mismo comportamiento de
+`--verbose`. Validado contra el laboratorio real (connection refused en
+puerto incorrecto, 401 con token inválido) -- ambos mensajes en inglés,
+claros y accionables. Los `logger.debug()` internos (solo visibles con
+`--verbose`) se dejaron en español, consistente con el resto de comentarios
+del código -- no son parte de la experiencia por defecto de un tester.
+
+**2. README actualizado al estado real.** Corregidos: fases completadas
+(era "3B", ahora refleja hasta 4A.1), conteo de tests (era 69, ahora 160),
+y una **contradicción interna real**: la sección "Estructura del
+repositorio" decía modo REST "implementado, sin probar contra Splunk
+real" mientras 20 líneas arriba decía "validado contra Splunk Enterprise
+real" -- ambas afirmaciones en el mismo documento. Agregado: versión
+mínima de Python (3.10+, antes solo en `pyproject.toml`), versión de
+Splunk Enterprise validada (10.4.3) vs. Splunk Cloud (no validado,
+con la salvedad conocida de acceso a `_internal`/`_audit`), aclaración de
+que TLS verification está activa por defecto y `--no-verify-ssl` es solo
+para certificados self-signed/controlados, que `--annual-spend` es
+opcional y sin él no se inventa ningún valor monetario, dónde quedan los
+outputs y cómo borrarlos (`rm -rf <output-dir>`, único lugar donde se
+escribe algo a disco), y una distinción explícita "validated" vs.
+"expected to work" para SO (Linux validado; macOS se espera que funcione,
+sin dependencias de plataforma, pero no probado; Windows no probado, sin
+asumir que funciona).
+
+**3. Instalación mínima verificada (no un supuesto).** Se probó
+`pip install -e .` (sin `[dev]`) en un venv completamente limpio: `--help`,
+`quickscan --from-csv`, `audit --from-csv` y la generación de HTML/Markdown
+funcionan correctamente sin `pytest` instalado. Es la instalación que se
+documenta para testers; `[dev]` queda reservado para desarrollo. No se
+encontró ningún bug de packaging -- no hizo falta corregir nada.
+
+**4. `docs/splunk-permissions.md` (nuevo).** Ficha de permisos Required /
+Recommended / Optional-not-evaluated + tabla de "failure behavior" por
+señal, basada en el código actual, las queries reales, D013/D014/D015 y
+la validación contra el laboratorio real. Cada afirmación está marcada
+explícitamente `[VERIFIED]` o `[INFERENCE]` (siguiendo la misma
+convención ya usada en `docs/splunk-data-sources.md`) -- en particular, la
+capability exacta para saved_searches (`list_settings`) sigue marcada como
+inferencia, no verificada por este proyecto, y el riesgo residual conocido
+de D015 (sin preflight equivalente para saved_searches) queda documentado
+explícitamente como limitación abierta, no oculta. No recomienda `admin`
+para un tester.
+
+**5. `docs/controlled-validation.md` (nuevo).** Guía práctica (no
+marketing) para el tester: qué hace/no hace la herramienta, privacidad/
+local-first (confirmado contra el código, no solo repetido de
+`docs/security.md`), instalación, referencia a la ficha de permisos,
+comandos reales de quickscan/audit, annual spend opcional, outputs,
+cleanup, y qué feedback se le pide de vuelta (sin preguntar todavía por
+precio).
+
+**6. Precisión de "read-only" (`docs/security.md`).** El texto decía "solo
+ejecuta GET/búsquedas de lectura", impreciso: el modo REST también usa
+`POST /services/search/jobs` en modo `oneshot` para correr cada query (así
+funciona la API de búsqueda de Splunk incluso para queries de solo
+lectura). Corregido a "operacionalmente read-only" con la distinción
+explícita: ningún endpoint de escritura/borrado se llama nunca (verificado
+por inspección directa de todos los métodos HTTP usados en
+`rest_collector.py`), pero "read-only" no significa "solo HTTP GET".
+
+**Validación final (entorno limpio, siguiendo únicamente la documentación
+nueva):** venv limpio -> `pip install -e .` -> `--help` -> `quickscan
+--from-csv` -> `audit --from-csv` -> HTML/MD generados -> confirmado sin
+`pytest` disponible -> `rm -rf output` limpia todo. Además, contra el
+laboratorio Splunk real: `quickscan`/`audit` en modo REST funcionan
+igual que antes, y dos rutas de error reales (connection refused, 401)
+muestran los nuevos mensajes en inglés correctamente.
+
+**Tests:** 160 passing (145 baseline + 15 nuevos: 4 traducciones de
+mensajes de `TestMandatoryIngestFailureBecomesRestCollectionError`
+actualizadas a aserciones en inglés, 1 limpieza de aserción muerta en
+`test_malformed_json_on_ingest_raises_rest_collection_error`, 3 en
+`TestCLIOperationalMessagesAreEnglish` (nuevo), 12 en
+`TestDescribeRestErrorIsAlwaysEnglish` (nuevo, parametrizado, cubre las 12
+ramas de `_describe_rest_error`)). Cero regresiones. CI sigue sin
+depender de Splunk/Docker/red real.
+
+**Explícitamente NO implementado (fuera de alcance por instrucción):**
+PyPI, wheel público, Docker distribution, auto-updater, installer, GUI,
+SaaS, telemetría, sistema de cuentas, licensing, Free/Pro, mejoras de CSV,
+recolección de dashboards, Elastic, scoring nuevo, reportes nuevos.
 
 ## Fase 3C — Real Reporting Validation (COMPLETADA)
 

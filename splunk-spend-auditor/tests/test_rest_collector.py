@@ -16,6 +16,7 @@ from splunk_spend_auditor.collector.rest_collector import (
     IndexAccessProbe,
     RestCollectionError,
     RestConfig,
+    _describe_rest_error,
     _index_pattern_matches,
     _probe_index_access,
     collect,
@@ -224,7 +225,7 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
             collect(config, "queries")
-        assert "conectar" in str(exc_info.value).lower()
+        assert "connect" in str(exc_info.value).lower()
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
 
     def test_timeout_on_ingest_raises_rest_collection_error(self):
@@ -234,7 +235,7 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
             collect(config, "queries")
-        assert "timeout" in str(exc_info.value).lower()
+        assert "timed out" in str(exc_info.value).lower()
 
     def test_401_on_ingest_raises_rest_collection_error_mentioning_auth(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -243,7 +244,7 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
         config = RestConfig(host="lab", token="bad-token", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
             collect(config, "queries")
-        assert "autenticaci" in str(exc_info.value).lower()
+        assert "authentic" in str(exc_info.value).lower()
 
     def test_403_on_ingest_raises_rest_collection_error_mentioning_permissions(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -252,7 +253,54 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
             collect(config, "queries")
-        assert "permisos" in str(exc_info.value).lower()
+        assert "permission" in str(exc_info.value).lower()
+
+
+class TestDescribeRestErrorIsAlwaysEnglish:
+    """Fase 4A.1 (D020): _describe_rest_error() alimenta el mensaje que el
+    CLI muestra por defecto (nunca un stack trace) para cada tipo de fallo
+    REST -- guarda de regresión para que ninguna rama vuelva a filtrarse en
+    español, sin importar el tipo de excepción."""
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            httpx.ConnectError("refused"),
+            httpx.ConnectTimeout("timed out"),
+            httpx.ReadTimeout("timed out"),
+            httpx.PoolTimeout("timed out"),
+            httpx.RequestError("generic transport error"),
+            httpx.HTTPStatusError(
+                "401", request=httpx.Request("GET", "https://lab:8089/x"),
+                response=httpx.Response(401, request=httpx.Request("GET", "https://lab:8089/x")),
+            ),
+            httpx.HTTPStatusError(
+                "403", request=httpx.Request("GET", "https://lab:8089/x"),
+                response=httpx.Response(403, request=httpx.Request("GET", "https://lab:8089/x")),
+            ),
+            httpx.HTTPStatusError(
+                "404", request=httpx.Request("GET", "https://lab:8089/x"),
+                response=httpx.Response(404, request=httpx.Request("GET", "https://lab:8089/x")),
+            ),
+            httpx.HTTPStatusError(
+                "429", request=httpx.Request("GET", "https://lab:8089/x"),
+                response=httpx.Response(429, request=httpx.Request("GET", "https://lab:8089/x")),
+            ),
+            httpx.HTTPStatusError(
+                "503", request=httpx.Request("GET", "https://lab:8089/x"),
+                response=httpx.Response(503, request=httpx.Request("GET", "https://lab:8089/x")),
+            ),
+            ValueError("bad json"),
+            RuntimeError("something else entirely"),
+        ],
+    )
+    def test_message_contains_no_spanish_accented_characters(self, exc):
+        message = _describe_rest_error(exc, "some context")
+        # Ningún mensaje en español de este módulo usa tildes/eñe -- una
+        # forma simple y robusta de detectar una regresión al español sin
+        # mantener una lista de palabras.
+        assert not any(ch in message for ch in "áéíóúñÁÉÍÓÚÑ")
+
 
     def test_500_on_ingest_raises_rest_collection_error(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -269,7 +317,7 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
             collect(config, "queries")
-        assert "malformada" in str(exc_info.value).lower() or "json" in str(exc_info.value).lower()
+        assert "malformed" in str(exc_info.value).lower() or "json" in str(exc_info.value).lower()
 
     def test_fatal_message_with_http_200_on_ingest_raises_rest_collection_error(self):
         """Chequeo defensivo (item 4, 'search job fallido'): aunque en la

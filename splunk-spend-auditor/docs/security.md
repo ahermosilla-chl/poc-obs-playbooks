@@ -13,10 +13,19 @@
    será opt-in explícito y documentado, nunca por defecto.
 3. **Credentials stored only locally**, y solo si el usuario elige el modo
    REST. Nunca se piden ni almacenan credenciales en el modo CSV.
-4. **Read-only contra Splunk.** El modo REST solo ejecuta `GET`/búsquedas de
-   lectura (`/search/jobs` con queries de solo lectura, `/saved/searches`
-   `GET`). Nunca se llama a un endpoint que modifique configuración, borre
-   datos o cambie inputs.
+4. **Operacionalmente read-only contra Splunk** -- no es lo mismo que "solo
+   usa HTTP GET". El modo REST llama a `GET` para introspección
+   (`/saved/searches`, `/authentication/current-context`,
+   `/authorization/roles/...`) y a `POST /services/search/jobs` en modo
+   `exec_mode=oneshot` para ejecutar cada query de solo lectura -- así
+   funciona la API de búsqueda de Splunk incluso para queries que no
+   escriben nada (`oneshot` ni siquiera deja un job persistente). Ninguna
+   de las dos cosas modifica configuración, borra datos ni cambia inputs.
+   Nunca se llama a un endpoint de escritura/borrado
+   (`/data/inputs/...` `POST`/`DELETE`, `/services/.../acl` `POST`, etc.)
+   -- verificado por inspección directa: los únicos métodos HTTP usados en
+   todo `collector/rest_collector.py` son `GET` y ese único `POST` de
+   búsqueda.
 
 ## Superficie de datos sensibles y cómo se trata
 

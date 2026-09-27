@@ -79,37 +79,37 @@ class SplunkQueryError(Exception):
 
 
 def _describe_rest_error(exc: Exception, context: str) -> str:
-    """Traduce una excepción técnica (httpx/Splunk) a un mensaje breve y
-    accionable para el usuario del CLI (item 8, "CLI Error UX"). El detalle
-    técnico completo se conserva en el log (logger.debug) y en
-    `exc.__cause__`, no se descarta."""
+    """Translates a technical exception (httpx/Splunk) into a short,
+    actionable message for the CLI user (item 8, "CLI Error UX"). The full
+    technical detail is preserved in the log (logger.debug) and in
+    `exc.__cause__`, never discarded."""
 
     if isinstance(exc, httpx.ConnectError):
-        return f"No se pudo conectar a Splunk para {context} (host/puerto inaccesible o connection refused)."
+        return f"Could not connect to Splunk for {context} (host/port unreachable or connection refused)."
     if isinstance(exc, httpx.ConnectTimeout):
-        return f"Timeout conectando a Splunk para {context}."
+        return f"Timed out connecting to Splunk for {context}."
     if isinstance(exc, httpx.ReadTimeout | httpx.PoolTimeout):
-        return f"Timeout esperando la respuesta de Splunk para {context}."
+        return f"Timed out waiting for Splunk's response for {context}."
     if isinstance(exc, httpx.RequestError):
-        return f"Error de red/TLS contactando Splunk para {context}: {exc}"
+        return f"Network/TLS error contacting Splunk for {context}: {exc}"
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status == 401:
-            return f"Autenticación falló (401) obteniendo {context} -- el token es inválido o expiró."
+            return f"Authentication failed (401) fetching {context} -- the token is invalid or expired."
         if status == 403:
-            return f"Permisos insuficientes (403) para obtener {context} -- revisa las capabilities del rol del token."
+            return f"Insufficient permissions (403) fetching {context} -- check the token's role capabilities."
         if status == 404:
-            return f"Endpoint no encontrado (404) obteniendo {context} -- verifica la versión de Splunk/la ruta del endpoint."
+            return f"Endpoint not found (404) fetching {context} -- check the Splunk version/endpoint path."
         if status == 429:
-            return f"Splunk devolvió 429 (too many requests) obteniendo {context} -- reintenta más tarde."
+            return f"Splunk returned 429 (too many requests) fetching {context} -- retry later."
         if 500 <= status < 600:
-            return f"Splunk devolvió un error de servidor ({status}) obteniendo {context}."
-        return f"Splunk devolvió HTTP {status} obteniendo {context}."
+            return f"Splunk returned a server error ({status}) fetching {context}."
+        return f"Splunk returned HTTP {status} fetching {context}."
     if isinstance(exc, SplunkQueryError):
-        return f"La query de Splunk para {context} falló: {exc}"
+        return f"The Splunk query for {context} failed: {exc}"
     if isinstance(exc, ValueError):
-        return f"Respuesta de Splunk malformada (JSON inválido) obteniendo {context}."
-    return f"Error inesperado obteniendo {context}: {exc}"
+        return f"Malformed response from Splunk (invalid JSON) fetching {context}."
+    return f"Unexpected error fetching {context}: {exc}"
 
 
 class IndexAccessProbe(str, Enum):
@@ -475,7 +475,7 @@ def collect(config: RestConfig, queries_dir: str) -> RawCollection:
         try:
             collection.ingest = _collect_ingest(client, queries_path)
         except _RECOVERABLE_REST_ERRORS + (SplunkQueryError, ValueError) as exc:
-            message = _describe_rest_error(exc, "ingest/license usage (fuente obligatoria)")
+            message = _describe_rest_error(exc, "ingest/license usage (mandatory source)")
             logger.debug("ingest (obligatorio) falló: %s", exc, exc_info=True)
             raise RestCollectionError(message) from exc
         collection.sources_available["ingest"] = SignalAvailability.AVAILABLE
