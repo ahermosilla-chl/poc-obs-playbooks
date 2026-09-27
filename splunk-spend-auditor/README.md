@@ -11,9 +11,10 @@ explicable, con un ahorro potencial estimado en dólares.
 Nunca modifica ni borra nada en Splunk. Nunca envía tus datos a un servidor
 externo — todo corre en tu propia máquina.
 
-> **Estado del proyecto:** Fase 2 completada (validación técnica + MVP
-> funcional contra datos sintéticos). Ver `PROJECT_STATUS.md` para el detalle
-> exacto de qué está hecho y qué falta antes de usarlo contra un Splunk real.
+> **Estado del proyecto:** Fase 2, 3A y 3B completadas -- MVP funcional,
+> validado contra Splunk real (Fase 3A) y endurecido contra pérdida de
+> señales/errores REST (Fase 3B). Ver `PROJECT_STATUS.md` para el detalle
+> exacto de qué está hecho y qué falta.
 
 ## Por qué existe
 
@@ -49,15 +50,27 @@ metodología).
 
 ## Uso contra tu propio entorno Splunk
 
-1. Corre las queries de `queries/*.spl` en Splunk Search (o exporta vía el
-   modo REST — ver `docs/architecture.md`, todavía no probado contra una
-   instancia real).
+**Modo CSV (sin credenciales):**
+1. Corre las queries de `queries/*.spl` en Splunk Search.
 2. Exporta cada resultado a CSV con el nombre esperado (ver
    `sample-data/schema/` para el esquema exacto de cada archivo).
 3. Corre `splunk-spend-auditor audit --from-csv <tu-directorio>`.
 
 Ninguna credencial de Splunk es necesaria en este flujo — nunca compartes
 acceso a tu instancia con esta herramienta.
+
+**Modo REST (validado contra Splunk Enterprise real en Fase 3A/3B):**
+
+```bash
+export SPLUNK_TOKEN=<tu token de Splunk>   # o se pide de forma interactiva
+splunk-spend-auditor audit --host <tu-splunk> --port 8089
+```
+
+El token nunca se pasa como argumento de línea de comandos ni se escribe a
+disco (ver `docs/security.md`). Requiere que el rol del token tenga acceso a
+`_internal` y, para resultados confiables, también a `_audit` y la
+capability `list_settings` — ver `DECISIONS.md` D015 para una limitación
+conocida cuando el token no tiene ese acceso.
 
 ## Estructura del repositorio
 

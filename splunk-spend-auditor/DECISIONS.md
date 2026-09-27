@@ -5,6 +5,149 @@ una, para no volver a discutirlas desde cero en sesiones futuras.
 
 ---
 
+## D013 — Modelo de disponibilidad de señales (`SignalAvailability`)
+
+**Contexto:** Fase 3B. `RawCollection.sources_available` (y
+`EnvironmentSummary.sources_available`) eran `dict[str, bool]` desde Fase 2 --
+solo podían distinguir "presente" de "ausente". Esto no alcanza para
+representar la diferencia entre "se consultó la fuente y el resultado es 0"
+(confirmado) y "no fue posible obtener la señal" (403, timeout, endpoint
+inaccesible, archivo no exportado) -- exactamente la ambigüedad que el brief
+de Fase 3B identificó como riesgo central.
+
+**Decisión:** se agregó `models.SignalAvailability` (enum: `AVAILABLE`,
+`UNAVAILABLE`, `PARTIAL`, `ERROR`, `NOT_APPLICABLE`) y se cambió el tipo de
+`sources_available` en ambos collectors y en `EnvironmentSummary`. Semántica:
+- `AVAILABLE`: se consultó con éxito; el resultado (incluso 0 filas) es una
+  respuesta real, usable como "confirmado ausente".
+- `UNAVAILABLE`: nunca se intentó (archivo CSV ausente, o el collector no
+  implementa esa fuente para este modo).
+- `PARTIAL`: se consultó pero la cobertura puede estar incompleta (p.ej.
+  límite `maxsearches` de `| map` alcanzado en `metadata_last_seen.spl`).
+- `ERROR`: se intentó y Splunk/la red devolvió un error explícito.
+- `NOT_APPLICABLE`: no es un resultado de query en este contexto (p.ej.
+  `dashboards_used`/`protected_overrides`, fuentes manuales opcionales por
+  diseño desde Fase 2, no una regresión de Fase 3B).
+
+**Razón:** es la pieza mínima de arquitectura necesaria para que
+`scoring/rules.py` pueda negarse a tratar un `0` como evidencia cuando la
+fuente que lo produjo no es confiable -- ver D014. Se evaluó (y descartó)
+agregar un campo separado por señal dentro de `Dataset` (p.ej.
+`audit_searches_available: bool`); se prefirió mantener la disponibilidad a
+nivel de FUENTE/ENTORNO (como ya lo era en Fase 2), no de dataset individual,
+porque así es como realmente falla una fuente REST (todo el endpoint
+falla o no, no un dataset a la vez) -- añadir granularidad por dataset habría
+sido una abstracción sin un caso real que la justifique.
+
+---
+
+## D014 — La pérdida de una señal nunca puede producir una clasificación más agresiva
+
+**Contexto:** Fase 3B. Se encontró y reprodujo un bug real (antes de este
+fix) en `scoring/rules.py::classify()`: un `Dataset` con
+`interactive_searches_90d=0`, `is_scheduled=False`, `has_alert_action=False`
+llegaba a `POSSIBLE_WASTE` exactamente igual sin importar si esos ceros
+estaban CONFIRMADOS (la fuente respondió y no hay uso) o eran simplemente el
+valor default de un campo que nunca se pudo poblar porque `audit_searches`/
+`saved_searches` fallaron (403, timeout, endpoint inaccesible). El código no
+consultaba `sources_available` en ningún punto de la clasificación -- a pesar
+de que `docs/architecture.md` ya documentaba desde Fase 2 el principio
+contrario ("nunca se asume 0 uso por ausencia de la fuente completa").
+
+**Decisión:** `classify()` recibe un nuevo parámetro,
+`unavailable_signals: frozenset[str]` (calculado por
+`classify_all.unavailable_signals_from(sources_available)`). Si
+`audit_searches` o `saved_searches` no están `AVAILABLE`, la regla
+`POSSIBLE_WASTE` NUNCA puede aplicarse -- el dataset se degrada a `REVIEW`
+(peso 0.5 en `compute_savings`, contra 1.0 de `POSSIBLE_WASTE`) con una
+explicación que nombra la fuente faltante. Deliberadamente **NO** se incluye
+`dashboards_used` en el conjunto de fuentes bloqueantes: su ausencia es una
+limitación estructural aceptada desde Fase 2
+(`docs/splunk-data-sources.md` sección 7 ya documentaba que omitirla, como
+máximo, subestima `HIGH_VALUE` -- nunca produce un falso `POSSIBLE_WASTE`).
+Incluirla habría bloqueado `POSSIBLE_WASTE` en casi todos los entornos reales
+(la mayoría de usuarios no exportan ese CSV opcional), un cambio de
+comportamiento no pedido y contrario al valor central del producto.
+
+**Validación:** además de los tests unitarios
+(`tests/test_rules.py::TestSignalAvailabilityGating`,
+`tests/test_savings.py::test_losing_visibility_never_increases_potential_savings`),
+se reprodujo el efecto extremo a extremo contra `sample-data/case_mixed`
+real: quitando `audit_searches.csv`, el ahorro potencial estimado cayó de
+36.3% ($34,211) a 21.6% ($20,296) -- nunca subió -- y `app:verbose_debug`/
+`windows:eventlog_raw` pasaron de `POSSIBLE_WASTE` a `REVIEW` con una
+explicación honesta. También se confirmó contra el laboratorio Splunk real de
+Fase 3A (ver PROJECT_STATUS.md).
+
+**Razón:** es exactamente la propiedad de seguridad pedida explícitamente
+para Fase 3B: "la pérdida de una señal nunca puede aumentar artificialmente
+la clasificación de desperdicio ni los potential savings". `REVIEW` en vez de
+`UNKNOWN` porque la fuente que falta es específica (audit/saved searches), no
+una falla generalizada del parser SPL en todo el entorno (eso sigue siendo
+D009, un eje ortogonal) -- `REVIEW` sigue exigiendo revisión manual sin
+descartar por completo la señal parcial que sí existe (p.ej. el propio
+ingest alto).
+
+**Limitación real encontrada durante la validación contra el laboratorio,
+NO resuelta en Fase 3B (ver D015):** este mecanismo depende de que la fuente
+falle con un error EXPLÍCITO (HTTP 4xx/5xx, timeout). Se confirmó contra el
+laboratorio que un usuario Splunk con `srchIndexesAllowed` restringido (sin
+`_audit` en la lista) NO recibe un 403 al consultar `_audit` -- la búsqueda
+devuelve HTTP 200 con `results: []`, indistinguible de "no hay búsquedas".
+Con un token así, `lsa_high_value` (HIGH_VALUE real, 12 búsquedas) se
+reclasificó como `POSSIBLE_WASTE` porque el mecanismo de esta decisión no
+tiene ninguna señal de error que capturar. Ver D015.
+
+---
+
+## D015 — Limitación conocida: permisos de índice restringidos pueden simular "cero" sin ningún error (no resuelto)
+
+**Contexto:** validado empíricamente en Fase 3B contra el laboratorio de
+Fase 3A. Se creó un rol Splunk real (`lsa_restricted`) con
+`srchIndexesAllowed=["_internal", "lsa_*"]` (sin `_audit`) y un token para un
+usuario con ese rol. La query `audit_interactive_searches.spl` contra
+`index=_audit` con ese token devuelve `HTTP 200`, `messages: []`,
+`results: []` -- Splunk aplica el scope de índices del rol en silencio, sin
+ningún error ni warning en la respuesta. Lo mismo aplica a
+`/servicesNS/-/-/saved/searches` sin la capability `list_settings`: puede
+devolver una lista reducida o vacía sin señal de error.
+
+**Impacto confirmado:** con ese token, `lsa_high_value` (HIGH_VALUE real con
+evidencia HIGH_VALUE confirmada usando el token admin) se reclasificó como
+`POSSIBLE_WASTE`. El mecanismo de D014 (bloquear `POSSIBLE_WASTE` cuando
+`sources_available` marca la fuente como no-`AVAILABLE`) **no cubre este
+caso** porque, desde la perspectiva del collector, la fuente respondió
+exitosamente -- no hay una excepción que capturar ni un status code de error
+que traducir a `ERROR`.
+
+**Decisión: NO se implementa una corrección automática en Fase 3B.** Se
+evaluó consultar `/services/authentication/current-context` +
+`/services/authorization/roles/<rol>` para inferir de antemano si el token
+tiene acceso a `_audit`/`list_settings`, y se descartó por ahora: la
+resolución de permisos efectivos de Splunk (roles importados, unión vs.
+intersección de `srchIndexesAllowed` entre roles heredados, wildcards `*` vs
+`_*`) no se pudo verificar con suficiente confianza en el tiempo disponible
+de esta fase como para justificar un heurístico que podría, si está mal
+calibrado, introducir el problema inverso (marcar como "no disponible" un
+token que en realidad sí tiene acceso completo). Un heurístico probablemente
+incorrecto es peor que un límite documentado honestamente.
+
+**Mitigación aplicada, no automática:** ninguna en código todavía. Queda como
+pendiente explícito (ver PROJECT_STATUS.md, "Pendientes de Fase 3B") con una
+recomendación concreta para cuando se aborde: probar
+`current-context.roles` + `authorization/roles/<rol>.srchIndexesAllowed` con
+`fnmatch` contra `_audit`, limitado a los roles DIRECTOS del usuario (sin
+resolver la cadena completa de `imported_roles`), documentado explícitamente
+como heurístico best-effort, no como garantía.
+
+**Recomendación operativa mientras tanto (documentada, no forzada por
+código):** el token REST usado con este producto debería tener acceso de
+lectura a `_audit` y la capability `list_settings` -- la misma
+recomendación que ya hacía `docs/splunk-data-sources.md` para el modo REST,
+ahora con evidencia empírica concreta de qué pasa si no se cumple.
+
+---
+
 ## D001 — Nombre provisional: "Log Spend Auditor"
 
 **Estado:** provisional, pendiente de investigación de trademark (Tarea 18 del

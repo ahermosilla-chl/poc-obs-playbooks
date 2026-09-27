@@ -1,18 +1,130 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 3A (validación contra Splunk real de laboratorio)
+Última actualización: cierre de Fase 3B (MVP reliability & graceful degradation)
 
 ## Estado actual
 
-**Fase 2 completada. Fase 3A completada — GO.** El MVP técnico (Fase 2) está
-construido, probado y validado end-to-end contra un escenario sintético que
-cubre los 10 casos pedidos en el brief original, más 2 adicionales
-descubiertos durante la propia validación. Fase 3A validó ese mismo diseño
-contra una instancia Splunk Enterprise real (no solo CSVs sintéticos) y
-encontró y corrigió 3 bugs reales que Fase 2 no podía detectar por su
-naturaleza (ver sección "Fase 3A" abajo). Fase 3B (hardening del collector
-real) y Fase 3C (reporte con datos reales) son los próximos pasos y todavía
-no empezaron.
+**Fase 2 completada. Fase 3A completada. Fase 3B completada — GO condicional
+(ver "Pendientes" abajo).** El MVP técnico (Fase 2) está construido, probado
+y validado end-to-end contra un escenario sintético. Fase 3A validó ese mismo
+diseño contra una instancia Splunk Enterprise real y encontró y corrigió 3
+bugs reales (D010/D011/D012). Fase 3B endureció el pipeline completo contra
+pérdida de señales, errores REST reales, y encontró y corrigió un bug de
+seguridad crítico (D014) más una limitación real no resuelta (D015) -- ver
+sección "Fase 3B" abajo. Fase 3C (reporte con datos reales) es el próximo
+paso y todavía no empezó.
+
+## Fase 3B — MVP Reliability & Graceful Degradation (COMPLETADA)
+
+**Objetivo:** convertir el MVP validado en Fase 3A en un sistema robusto
+ante permisos parciales, señales no disponibles, errores REST y timeouts --
+sin agregar funcionalidad comercial nueva. Principio rector: la pérdida de
+visibilidad nunca puede aumentar artificialmente una clasificación de
+desperdicio ni el ahorro potencial estimado.
+
+**Baseline confirmado antes de modificar nada:** 72 tests passing (exacto,
+como se esperaba desde el cierre de Fase 3A).
+
+**Cambios de arquitectura:**
+- `models.SignalAvailability` (D013): reemplaza `dict[str, bool]` por un
+  enum de 5 estados (`AVAILABLE`/`UNAVAILABLE`/`PARTIAL`/`ERROR`/
+  `NOT_APPLICABLE`) para poder distinguir "consultado, resultado 0" de "no
+  se pudo consultar" en cada fuente (ingest, audit_searches, saved_searches,
+  dashboards_used, last_seen, protected_overrides).
+- `scoring/rules.py::classify()` y `scoring/classify_all.py` (D014): la
+  regla `POSSIBLE_WASTE` ahora exige que `audit_searches` y `saved_searches`
+  estén `AVAILABLE` -- si no, degrada a `REVIEW` con una explicación
+  explícita nombrando la fuente faltante. `dashboards_used` deliberadamente
+  NO bloquea (limitación ya aceptada desde Fase 2).
+- `collector/rest_collector.py`: reescrito con manejo de errores explícito
+  (`httpx.HTTPStatusError`/`httpx.RequestError` distinguidos, mensajes
+  legibles por código HTTP), una fuente obligatoria (`ingest`, igual que el
+  modo CSV) que levanta `RestCollectionError` en vez de dejar escapar la
+  excepción cruda de httpx, y wiring end-to-end de `metadata_last_seen.spl`
+  (corregida en Fase 3A/D011, NO reescrita en Fase 3B) con detección de
+  cobertura parcial y filtrado de índices por defecto de Splunk (`main`,
+  `history`, `summary`) que `eventcount index=*` sí recorre.
+- `cli.py`: ahora expone el modo REST (`--host`/`--port`/`--no-verify-ssl`,
+  token leído de `SPLUNK_TOKEN` o `getpass`, nunca como argumento de línea
+  de comandos -- ver docs/security.md) además del modo `--from-csv` ya
+  existente. Errores operacionales muestran un mensaje breve y accionable
+  por defecto; `--verbose` habilita logging técnico completo (`logging`
+  estándar, sin framework nuevo).
+- `templates/report.*.j2` + `reports/render.py`: la sección Methodology
+  muestra un aviso "Analysis completed with reduced confidence" con las
+  fuentes degradadas nombradas, y el estado de cada fuente en lenguaje claro
+  en vez de solo "available"/"NOT available".
+
+**Bugs reales encontrados y corregidos:**
+1. **(D014, el más importante de esta fase)** Un dataset con evidencia de
+   uso perdida por completo por un fallo de fuente (403/timeout en
+   `audit_searches`/`saved_searches`) llegaba a `POSSIBLE_WASTE` exactamente
+   igual que uno con evidencia confirmada de cero uso -- el código nunca
+   consultaba `sources_available` al clasificar, a pesar de que
+   `docs/architecture.md` documentaba lo contrario desde Fase 2. Reproducido
+   antes del fix, corregido, validado con tests unitarios Y contra
+   `sample-data/case_mixed` real (ver D014) Y contra el laboratorio Splunk
+   real de Fase 3A.
+2. El collector REST nunca ejecutaba `metadata_last_seen.spl` --
+   `sources_available["last_seen"]` estaba hardcodeado en `False`/
+   `UNAVAILABLE` sin intentarlo. Ahora se ejecuta, con detección de
+   cobertura parcial y filtrado de ruido (índices por defecto de Splunk).
+3. Cualquier fallo de red (`httpx.RequestError`: connection refused,
+   timeout, TLS) en la fuente obligatoria (`ingest`) dejaba escapar la
+   excepción cruda de httpx hasta el CLI -- ningún manejo, stack trace
+   completo mostrado al usuario por defecto. Ahora se envuelve en
+   `RestCollectionError` con mensaje accionable.
+
+**Limitación real encontrada, NO resuelta (D015):** un token con
+`srchIndexesAllowed` restringido (sin `_audit`) recibe `HTTP 200` con
+`results: []` al consultar `_audit` -- indistinguible de "cero búsquedas
+reales" a nivel de API. Confirmado contra el laboratorio real: con un token
+así, un dataset `HIGH_VALUE` confirmado (12 búsquedas reales con el token
+admin) se reclasificó como `POSSIBLE_WASTE`. El mecanismo de D014 no cubre
+este caso porque no hay ningún error que capturar. Ver D015 para el análisis
+completo y por qué no se implementó una corrección automática esta fase.
+
+**Tests:** 95 passing (72 baseline + 23 nuevos: 6 de
+`TestSignalAvailabilityGating`, 1 de `test_losing_visibility_never_increases_potential_savings`,
+2 de `test_protected_overrides_availability...`, 14 de hardening del
+collector REST en `tests/test_rest_collector.py`, 2 de
+`tests/test_architecture_boundaries.py`). Todos con `httpx.MockTransport` --
+ninguno depende de red/Docker/Splunk real. Cero regresiones sobre el
+baseline de 72.
+
+**Validado contra Splunk real (laboratorio de Fase 3A, sigue vivo):**
+- `audit --host localhost --port 8089` end-to-end contra el laboratorio: las
+  7 clasificaciones coinciden con lo esperado, incluyendo `last_seen` ahora
+  disponible (antes nunca se intentaba).
+- Token inválido (401) real contra el laboratorio -> mensaje limpio, exit
+  code 1, sin stack trace (con `--verbose` sí se ve el detalle técnico).
+- Host inaccesible / connection refused (real, no mockeado) -> mismo
+  comportamiento.
+- Rol Splunk real con `srchIndexesAllowed` restringido (sin `_audit`) creado
+  específicamente para esta validación -> encontró D015 (arriba).
+- Todo lo demás (401/403/404/429/5xx, timeouts de red, JSON malformado,
+  query con mensaje FATAL) está cubierto por `httpx.MockTransport`, no
+  reproducido contra el laboratorio real (no todos esos escenarios son
+  seguros/prácticos de forzar contra una instancia real compartida).
+
+## Pendientes de Fase 3B (reales, no triviales)
+
+1. **D015** -- permisos de índice restringidos que devuelven `200`/`[]` en
+   vez de un error no se detectan. Recomendación concreta para cuando se
+   aborde: sondear `current-context.roles` +
+   `authorization/roles/<rol>.srchIndexesAllowed` con `fnmatch`, limitado a
+   roles directos (sin resolver `imported_roles` recursivamente), como
+   heurístico best-effort explícitamente etiquetado como tal.
+2. `protected_overrides` no tiene forma de proveerse en modo REST (solo
+   existe como archivo dentro del directorio `--from-csv`). Gap menor, no
+   bloqueante.
+3. El residual conocido desde D010 (2 saved searches de sistema de la app
+   `audit_trail` con `owner=admin` que sobreviven el filtro) sigue
+   presente -- en la validación de Fase 3B contra el laboratorio aparece
+   como `_audit:audittrail`, correctamente clasificado `PROTECTED` por el
+   patrón de nombre, impacto nulo confirmado.
+4. No se validó el modo REST contra Splunk Cloud (solo Enterprise vía
+   Docker) ni a escala de producción -- mismo alcance que Fase 3A.
 
 ## Fase 3A — Validación contra Splunk real de laboratorio (COMPLETADA)
 
@@ -191,28 +303,22 @@ resuelve con el mecanismo manual de `protected_overrides.txt`.
 
 ## Próximos pasos
 
-**Fase 3B (hardening del MVP) — no iniciada:**
-1. Terminar de conectar `metadata_last_seen.spl` (ya corregido, D011) al
-   collector REST — hoy `sources_available["last_seen"]` está fijo en
-   `False`, la query nunca se ejecuta desde `collect()`.
-2. Manejo de errores/timeouts explícitos: instancia inaccesible, permisos
-   insuficientes por fuente (parcialmente cubierto ya — `try/except` por
-   fuente degrada en vez de fallar), queries parcialmente disponibles.
-3. Mensajes CLI claros para cada modo de degradación.
-4. Tests adicionales de hardening (más allá de los 3 de regresión ya
-   agregados en Fase 3A).
-
 **Fase 3C (reporte real) — no iniciada:**
 1. Generar quickscan + audit completo (HTML/Markdown) usando datos del
-   laboratorio de Fase 3A.
+   laboratorio de Fase 3A/3B.
 2. Revisión manual del HTML para un Splunk Admin/Platform Engineer/manager/FinOps.
+
+**Fase 3B, pendiente real no bloqueante (ver D015 y "Pendientes de Fase
+3B" arriba):**
+- Heurístico best-effort para detectar permisos de índice restringidos que
+  devuelven `200`/`[]` en vez de un error explícito.
 
 **Más adelante:**
 - Publicar el Quickscan gratuito según `docs/validation-plan.md`.
 - Preparar el repositorio para GitHub público (licencia, sin credenciales).
 - Medir señales de interés antes de construir el motor completo Pro.
 - Validar contra Splunk Cloud real y a escala de producción (fuera de
-  alcance del laboratorio Docker de Fase 3A — ver esa sección arriba).
+  alcance del laboratorio Docker de Fase 3A/3B — ver esas secciones arriba).
 
 ## Decisiones pendientes que requieren al usuario
 
@@ -221,13 +327,16 @@ resuelve con el mecanismo manual de `protected_overrides.txt`.
 - Precio final de lanzamiento del Quickscan/reporte Pro (hay un rango propuesto
   en `docs/product-spec.md`, pero el precio final es una decisión de negocio).
 - Si se usará una cuenta de Splunk real de producción para pruebas futuras, o
-  se sigue trabajando contra laboratorios efímeros como el de Fase 3A.
+  se sigue trabajando contra laboratorios efímeros como el de Fase 3A/3B.
+- Si D015 (permisos restringidos que simulan "cero" sin error) se aborda con
+  el heurístico best-effort propuesto, o se documenta solo como
+  recomendación operativa (token con acceso amplio) indefinidamente.
 
-## Recomendación de cierre de Fase 3A
+## Recomendación de cierre de Fase 3B
 
-**GO.** El collector REST y las queries SPL de Fase 2 funcionan contra un
-Splunk real, y los 3 bugs que la validación encontró ya están corregidos y
-cubiertos por tests de regresión. El diseño central (D002, D004, D009) no
-necesitó cambios de fondo. El siguiente paso natural es Fase 3B (terminar el
-collector real: wiring de `last_seen`, hardening de errores) seguido de Fase
-3C (generar y revisar el reporte con estos datos reales).
+Ver el informe estructurado entregado al usuario al cierre de esta fase
+(sección L, "Recomendación") para el detalle completo. Resumen: el diseño
+central (D002, D004, D009) sigue sin necesitar cambios de fondo; Fase 3B
+corrigió un bug de seguridad real (D014) y encontró una limitación real no
+resuelta (D015) que no bloquea avanzar pero debe quedar visible antes de
+Fase 3C.

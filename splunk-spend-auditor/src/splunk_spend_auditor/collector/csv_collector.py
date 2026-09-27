@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from splunk_spend_auditor.models import SignalAvailability
+
 
 @dataclass
 class RawCollection:
@@ -27,7 +29,11 @@ class RawCollection:
     last_seen: pd.DataFrame | None = None
     protected_overrides: set[tuple[str, str]] = field(default_factory=set)
 
-    sources_available: dict[str, bool] = field(default_factory=dict)
+    # Ver models.SignalAvailability (D013) -- un archivo presente (incluso
+    # vacío) es AVAILABLE; ausente es UNAVAILABLE. El modo CSV nunca produce
+    # PARTIAL/ERROR -- esos estados son específicos de fuentes "en vivo"
+    # (REST) donde una consulta puede fallar a mitad de camino.
+    sources_available: dict[str, SignalAvailability] = field(default_factory=dict)
 
 
 _EXPECTED_FILES = {
@@ -74,13 +80,16 @@ def load_from_directory(directory: str | Path) -> RawCollection:
     for attr, filename in _EXPECTED_FILES.items():
         df = _read_optional_csv(directory / filename)
         setattr(collection, attr, df)
-        collection.sources_available[attr] = df is not None
+        collection.sources_available[attr] = (
+            SignalAvailability.AVAILABLE if df is not None else SignalAvailability.UNAVAILABLE
+        )
 
-    collection.protected_overrides = _read_protected_overrides(
-        directory / "protected_overrides.txt"
-    )
-    collection.sources_available["protected_overrides"] = bool(
-        collection.protected_overrides
+    overrides_path = directory / "protected_overrides.txt"
+    collection.protected_overrides = _read_protected_overrides(overrides_path)
+    collection.sources_available["protected_overrides"] = (
+        SignalAvailability.AVAILABLE
+        if overrides_path.exists()
+        else SignalAvailability.NOT_APPLICABLE
     )
 
     if collection.ingest is None:

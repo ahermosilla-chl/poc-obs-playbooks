@@ -14,6 +14,42 @@ class ParserConfidence(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class SignalAvailability(str, Enum):
+    """Fase 3B (D013) -- calidad/disponibilidad de una fuente de señal
+    (ingest, audit_searches, saved_searches, dashboards_used, last_seen).
+
+    Reemplaza el `dict[str, bool]` de Fase 2/3A, que solo podía distinguir
+    "presente" de "ausente" y por lo tanto no podía representar la
+    diferencia entre "se consultó y el resultado es 0" (AVAILABLE) y "no fue
+    posible obtener la señal" (ERROR/UNAVAILABLE) -- ver DECISIONS.md D013.
+
+    - AVAILABLE: la fuente se consultó con éxito. El resultado (incluso si
+      son 0 filas) es una respuesta real y puede usarse como evidencia de
+      "confirmado ausente", no solo de "no se sabe".
+    - UNAVAILABLE: la fuente nunca se consultó (archivo CSV no existía, o el
+      collector no la implementa para este modo). No es un error -- es una
+      ausencia estructural, conocida de antemano.
+    - PARTIAL: la fuente se consultó pero el resultado puede estar
+      incompleto (p.ej. un límite de paginación/`map` alcanzado). Se trata
+      igual que UNAVAILABLE para decisiones de clasificación -- no se
+      confía en un "cero" parcial -- pero se reporta distinto porque hubo
+      señal real, solo que no se puede garantizar que sea completa.
+    - ERROR: se intentó consultar la fuente y Splunk/la red devolvió un
+      error (401/403/404/429/5xx, timeout, TLS, JSON malformado, etc.).
+      Distinto de UNAVAILABLE porque aquí SÍ hubo un intento que falló --
+      relevante para diagnóstico y para el mensaje que ve el usuario.
+    - NOT_APPLICABLE: la fuente no es un resultado de query en absoluto para
+      este contexto (p.ej. `protected_overrides` cuando el usuario no pasó
+      ningún archivo de overrides -- es una ausencia de configuración
+      opcional, no la pérdida de una señal de uso real)."""
+
+    AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+    PARTIAL = "PARTIAL"
+    ERROR = "ERROR"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
 class Classification(str, Enum):
     """Ver docs/scoring.md, sección 5. El orden aquí no importa para la
     lógica (las reglas se evalúan explícitamente en scoring/classify.py),
@@ -88,4 +124,4 @@ class EnvironmentSummary:
     datasets_with_high_confidence_evidence: int = 0
     partial_or_unknown_ratio: float = 0.0
     lookback_days: int = 90
-    sources_available: dict[str, bool] = field(default_factory=dict)
+    sources_available: dict[str, SignalAvailability] = field(default_factory=dict)

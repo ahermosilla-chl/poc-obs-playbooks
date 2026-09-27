@@ -45,6 +45,20 @@ HIGH_VALUE_SEARCH_THRESHOLD = 10
 # ningún dataset individual como evidencia de falta de uso.
 UNKNOWN_ENVIRONMENT_RATIO_THRESHOLD = 0.5
 
+# Fase 3B (D013/D014) -- fuentes cuya AUSENCIA (SignalAvailability distinto
+# de AVAILABLE) impide confiar en "cero uso" para la regla POSSIBLE_WASTE.
+# NO incluye "dashboards_used": su ausencia es una limitación estructural
+# ya documentada y aceptada desde Fase 2 (docs/splunk-data-sources.md
+# sección 7) -- el MVP nunca garantizó tener esa fuente, a diferencia de
+# audit_searches/saved_searches, que si fallan representan una pérdida de
+# visibilidad NUEVA (no un límite de diseño conocido de antemano) y son
+# señales críticas para D007 ("distinguir sin búsquedas manuales de sin
+# uso"). Incluir dashboards_used aquí bloquearía POSSIBLE_WASTE en casi
+# todos los entornos reales (la mayoría de usuarios no exportan ese CSV
+# opcional) y sería un cambio de comportamiento no pedido -- ver
+# DECISIONS.md D013.
+SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE = frozenset({"audit_searches", "saved_searches"})
+
 
 def matches_default_protected_pattern(dataset: Dataset) -> bool:
     combined = f"{dataset.key.index}:{dataset.key.sourcetype}"
@@ -70,6 +84,7 @@ def classify(
     dataset: Dataset,
     high_ingest_threshold_gb: float,
     environment_partial_unknown_ratio: float,
+    unavailable_signals: frozenset[str] = frozenset(),
 ) -> tuple[Classification, str]:
     """docs/scoring.md sección 5. Devuelve (categoría, explicación).
 
@@ -83,7 +98,17 @@ def classify(
     una macro que no se pudo resolver en NINGÚN lado del entorno), así que
     no se puede confiar en el "silencio" de ningún dataset individual. Si es
     baja, el entorno tiene buena cobertura de parsing y el silencio de un
-    dataset específico SÍ es evidencia real de falta de uso."""
+    dataset específico SÍ es evidencia real de falta de uso.
+
+    unavailable_signals: nombres de fuentes (ver
+    SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE) que NO están
+    SignalAvailability.AVAILABLE en este run -- Fase 3B (D013/D014). Si
+    alguna de las fuentes necesarias para confirmar "cero uso" no está
+    disponible, la regla POSSIBLE_WASTE nunca puede aplicarse: el 0 que
+    trae el Dataset en esos campos podría ser "confirmado" o simplemente
+    "nunca se pudo consultar" y este parámetro es la única forma de
+    distinguirlos en este punto (Dataset por sí solo no lo sabe -- ver
+    docs/architecture.md, "Manejo de errores")."""
 
     # Regla 1: PROTECTED
     if dataset.is_protected:
@@ -149,6 +174,24 @@ def classify(
         and not dataset.has_alert_action
         and not dataset.used_in_dashboards
     )
+    missing_for_zero_usage = unavailable_signals & SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE
+    if is_high_ingest and has_zero_usage and missing_for_zero_usage:
+        # Fase 3B, regla de seguridad (D013/D014): con evidencia completa
+        # este dataset SERÍA POSSIBLE_WASTE, pero no se puede confirmar
+        # "cero uso" porque una o más fuentes necesarias no están
+        # disponibles -- la pérdida de visibilidad nunca puede producir una
+        # clasificación MÁS agresiva. Se degrada a REVIEW (peso 0.5 en el
+        # cálculo de ahorro, ver scoring/savings.py) en vez de
+        # POSSIBLE_WASTE (peso 1.0).
+        missing_label = ", ".join(sorted(missing_for_zero_usage))
+        return Classification.REVIEW, (
+            f"This dataset ingests {dataset.ingest_gb_per_day:.1f} GB/day "
+            f"and shows no usage in the signals that ARE available, but "
+            f"{missing_label} could not be checked in this run "
+            f"(insufficient visibility, not confirmed absence of usage). "
+            f"Cannot confirm zero usage -- treated as REVIEW, not "
+            f"POSSIBLE_WASTE, until those signals are available."
+        )
     if is_high_ingest and has_zero_usage:
         return Classification.POSSIBLE_WASTE, (
             f"This dataset appears as a candidate because it ingests "

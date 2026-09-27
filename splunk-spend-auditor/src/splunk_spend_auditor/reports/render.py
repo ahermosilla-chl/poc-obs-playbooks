@@ -10,10 +10,26 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from splunk_spend_auditor import __version__
-from splunk_spend_auditor.models import Classification, Dataset, EnvironmentSummary
+from splunk_spend_auditor.models import Classification, Dataset, EnvironmentSummary, SignalAvailability
 from splunk_spend_auditor.scoring.classify_all import high_ingest_threshold_for
 from splunk_spend_auditor.scoring.rules import REVIEW_WEIGHT
 from splunk_spend_auditor.scoring.savings import SavingsEstimate
+
+# Fase 3B (D013/D014, item 5 "graceful degradation") -- texto legible por
+# humanos para cada SignalAvailability, mostrado en la sección Methodology
+# del reporte. UNAVAILABLE/PARTIAL/ERROR cuentan como "degraded": ninguno de
+# los tres es una confirmación real de la señal, aunque tengan causas
+# distintas (no se intentó / cobertura incompleta / falló al intentarlo).
+_SIGNAL_STATUS_LABEL = {
+    SignalAvailability.AVAILABLE: "available",
+    SignalAvailability.UNAVAILABLE: "not available (not attempted for this run)",
+    SignalAvailability.PARTIAL: "partially available (coverage may be incomplete)",
+    SignalAvailability.ERROR: "not available (query or connection failed)",
+    SignalAvailability.NOT_APPLICABLE: "not applicable for this run",
+}
+_DEGRADED_SIGNAL_STATES = frozenset(
+    {SignalAvailability.UNAVAILABLE, SignalAvailability.PARTIAL, SignalAvailability.ERROR}
+)
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "templates"
 
@@ -120,6 +136,17 @@ def build_report_context(
         for ds in candidates_all[:candidate_top_n]
     ]
 
+    sources_available_display = [
+        {
+            "source": source,
+            "status": status.value,
+            "label": _SIGNAL_STATUS_LABEL.get(status, status.value),
+            "degraded": status in _DEGRADED_SIGNAL_STATES,
+        }
+        for source, status in summary.sources_available.items()
+    ]
+    degraded_signal_names = [row["source"] for row in sources_available_display if row["degraded"]]
+
     all_datasets_detail = [
         {
             "name": _display_name(ds),
@@ -148,6 +175,9 @@ def build_report_context(
         "high_ingest_threshold_gb": round(high_ingest_threshold, 2),
         "partial_or_unknown_ratio": summary.partial_or_unknown_ratio,
         "sources_available": summary.sources_available,
+        "sources_available_display": sources_available_display,
+        "reduced_confidence": bool(degraded_signal_names),
+        "degraded_signal_names": degraded_signal_names,
         # Nota de squashing (docs/splunk-data-sources.md): en el MVP no se
         # analiza host/source, así que esta nota siempre se muestra como
         # recordatorio metodológico, no como señal detectada dinámicamente.

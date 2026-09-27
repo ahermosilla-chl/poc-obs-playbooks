@@ -4,7 +4,14 @@ pasar por CSV -- para aislar la lógica de negocio de la de collectors."""
 
 import pytest
 
-from splunk_spend_auditor.models import Classification, Dataset, DatasetKey, ParserConfidence
+from splunk_spend_auditor.models import (
+    Classification,
+    Dataset,
+    DatasetKey,
+    ParserConfidence,
+    SignalAvailability,
+)
+from splunk_spend_auditor.scoring.classify_all import unavailable_signals_from
 from splunk_spend_auditor.scoring.rules import (
     UNKNOWN_ENVIRONMENT_RATIO_THRESHOLD,
     classify,
@@ -191,6 +198,128 @@ class TestPossibleWaste:
         )
         classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.HIGH_VALUE
+
+
+class TestSignalAvailabilityGating:
+    """Fase 3B (D013/D014): la pérdida de audit_searches/saved_searches
+    nunca puede convertir un dataset en un candidato MÁS agresivo. Ver
+    PROJECT_STATUS.md, sección "Fase 3B", y DECISIONS.md D013/D014."""
+
+    def _unavailable(self, *sources: str) -> frozenset[str]:
+        return unavailable_signals_from(
+            {source: SignalAvailability.ERROR for source in sources}
+        )
+
+    def test_missing_audit_and_saved_searches_downgrades_to_review_not_waste(self):
+        """Bug real encontrado en Fase 3B (reproducido antes del fix): un
+        dataset con alto ingest y "cero uso" solo porque audit_searches y
+        saved_searches nunca se pudieron consultar (403/timeout) llegaba a
+        POSSIBLE_WASTE exactamente igual que uno con evidencia confirmada.
+        Con el fix, debe quedar REVIEW."""
+        ds = _ds(
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            is_scheduled=False,
+            has_alert_action=False,
+            parser_confidence=ParserConfidence.UNKNOWN,
+        )
+        classification, explanation = classify(
+            ds,
+            HIGH_INGEST_THRESHOLD,
+            LOW_PARTIAL_RATIO,
+            self._unavailable("audit_searches", "saved_searches"),
+        )
+        assert classification == Classification.REVIEW
+        assert classification != Classification.POSSIBLE_WASTE
+        assert "audit_searches" in explanation
+        assert "saved_searches" in explanation
+
+    def test_missing_only_one_of_the_two_sources_still_blocks_possible_waste(self):
+        """Basta con que UNA de las dos fuentes críticas falte -- no hace
+        falta que ambas fallen para perder la confianza en el "cero"."""
+        ds = _ds(
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            parser_confidence=ParserConfidence.HIGH,
+        )
+        unavailable = unavailable_signals_from(
+            {
+                "audit_searches": SignalAvailability.AVAILABLE,
+                "saved_searches": SignalAvailability.ERROR,
+            }
+        )
+        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, unavailable)
+        assert classification == Classification.REVIEW
+
+    def test_missing_dashboards_used_alone_does_not_block_possible_waste(self):
+        """dashboards_used es una fuente manual opcional desde Fase 2
+        (docs/splunk-data-sources.md sección 7) -- su ausencia estructural
+        NO es una regresión de Fase 3B y no debe bloquear POSSIBLE_WASTE,
+        o el producto dejaría de encontrar su caso central en la inmensa
+        mayoría de entornos reales (que no exportan ese CSV opcional)."""
+        ds = _ds(
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            parser_confidence=ParserConfidence.HIGH,
+        )
+        unavailable = unavailable_signals_from(
+            {
+                "audit_searches": SignalAvailability.AVAILABLE,
+                "saved_searches": SignalAvailability.AVAILABLE,
+                "dashboards_used": SignalAvailability.ERROR,
+            }
+        )
+        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, unavailable)
+        assert classification == Classification.POSSIBLE_WASTE
+
+    def test_all_sources_confirmed_available_still_reaches_possible_waste(self):
+        """Con evidencia completa y confirmada, el comportamiento pre-3B se
+        mantiene exactamente igual -- este fix nunca debe impedir detectar
+        el caso real de desperdicio cuando SÍ hay visibilidad completa."""
+        ds = _ds(
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            parser_confidence=ParserConfidence.HIGH,
+        )
+        available = unavailable_signals_from(
+            {
+                "audit_searches": SignalAvailability.AVAILABLE,
+                "saved_searches": SignalAvailability.AVAILABLE,
+            }
+        )
+        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, available)
+        assert classification == Classification.POSSIBLE_WASTE
+
+    def test_missing_signal_is_not_silently_treated_as_zero_signal(self):
+        """La propiedad conceptual pedida explícitamente: "missing signal !=
+        zero signal". Dos datasets con el MISMO valor numérico
+        (interactive_searches_90d=0, is_scheduled=False) deben clasificar
+        distinto según si esos ceros están CONFIRMADOS o son solo el default
+        de un campo que nunca se pudo poblar."""
+        confirmed_zero = _ds(
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            is_scheduled=False,
+            parser_confidence=ParserConfidence.HIGH,
+        )
+        unconfirmed_zero = _ds(
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,  # mismo valor numérico...
+            is_scheduled=False,  # ...pero nunca se pudo confirmar
+            parser_confidence=ParserConfidence.UNKNOWN,
+        )
+        classification_confirmed, _ = classify(
+            confirmed_zero, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO,
+            self._unavailable(),
+        )
+        classification_unconfirmed, _ = classify(
+            unconfirmed_zero, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO,
+            self._unavailable("audit_searches", "saved_searches"),
+        )
+        assert confirmed_zero.interactive_searches_90d == unconfirmed_zero.interactive_searches_90d
+        assert classification_confirmed == Classification.POSSIBLE_WASTE
+        assert classification_unconfirmed == Classification.REVIEW
+        assert classification_confirmed != classification_unconfirmed
 
 
 class TestNormal:
