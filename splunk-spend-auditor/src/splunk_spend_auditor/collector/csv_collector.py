@@ -35,6 +35,12 @@ class RawCollection:
     # (REST) donde una consulta puede fallar a mitad de camino.
     sources_available: dict[str, SignalAvailability] = field(default_factory=dict)
 
+    # Fase 3B/D015: razón legible por humanos para una fuente degradada,
+    # cuando hay algo más específico que decir que el estado genérico (p.ej.
+    # "no se pudo confirmar acceso a _audit" en vez de solo "UNAVAILABLE").
+    # Opcional -- la mayoría de las fuentes degradadas no la necesitan.
+    diagnostics: dict[str, str] = field(default_factory=dict)
+
 
 _EXPECTED_FILES = {
     "ingest": "ingest_by_index_sourcetype.csv",

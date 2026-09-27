@@ -172,6 +172,7 @@ def build_datasets(
         partial_or_unknown_ratio=partial_unknown_ratio,
         lookback_days=lookback_days,
         sources_available=dict(collection.sources_available),
+        diagnostics=dict(collection.diagnostics),
     )
 
     return list(datasets.values()), summary

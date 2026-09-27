@@ -85,8 +85,16 @@ def classify(
     high_ingest_threshold_gb: float,
     environment_partial_unknown_ratio: float,
     unavailable_signals: frozenset[str] = frozenset(),
-) -> tuple[Classification, str]:
-    """docs/scoring.md sección 5. Devuelve (categoría, explicación).
+) -> tuple[Classification, str, bool]:
+    """docs/scoring.md sección 5. Devuelve
+    (categoría, explicación, excluded_from_savings).
+
+    excluded_from_savings (Fase 3B/D015): True cuando el dataset cae en
+    REVIEW sin ninguna base real para asignarle peso en el cálculo de
+    ahorro potencial -- porque la misma señal faltante que impidió
+    confirmar "cero uso" (D014) también podría haber confirmado
+    HIGH_VALUE. Ver models.Dataset.excluded_from_savings_estimate y
+    scoring/savings.py.
 
     high_ingest_threshold_gb: percentil 75 de GB/día de este entorno.
 
@@ -116,13 +124,13 @@ def classify(
         return Classification.PROTECTED, (
             f"Protected dataset ({reason}). Never auto-classified as waste, "
             "regardless of usage signals."
-        )
+        ), False
     if matches_default_protected_pattern(dataset):
         return Classification.PROTECTED, (
             "Protected dataset: name matches a default security/compliance "
             "pattern. Never auto-classified as waste, regardless of usage "
             "signals."
-        )
+        ), False
 
     # Regla 2: UNKNOWN -- solo se aplica cuando el ENTORNO en su conjunto
     # tiene mala cobertura de parsing (ver docs/scoring.md sección 3, "Regla
@@ -142,7 +150,7 @@ def classify(
             "using macros or eventtypes that could not be resolved), so the "
             "absence of a direct match cannot be trusted as real evidence "
             "of no usage. Not classified as waste."
-        )
+        ), False
 
     # Regla 3: HIGH_VALUE
     if (
@@ -164,7 +172,19 @@ def classify(
             signals.append("is used in a dashboard")
         return Classification.HIGH_VALUE, (
             "This dataset is actively used: " + "; ".join(signals) + "."
-        )
+        ), False
+
+    # A partir de acá el dataset NO pudo confirmarse como HIGH_VALUE. Si
+    # además falta una fuente crítica (audit_searches/saved_searches), ese
+    # "no pudo confirmarse" es ambiguo: el dataset podría en realidad ser
+    # HIGH_VALUE (p.ej. is_scheduled=True que nunca pudimos ver porque
+    # saved_searches falló) -- ver DECISIONS.md D015. Cualquier REVIEW al
+    # que se llegue desde aquí en adelante, mientras esto sea cierto, no
+    # tiene base real para llevar NI SIQUIERA el peso reducido de REVIEW en
+    # el cálculo de ahorro (scoring/savings.py) -- se marca
+    # excluded_from_savings=True.
+    missing_for_zero_usage = unavailable_signals & SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE
+    high_value_unconfirmable = bool(missing_for_zero_usage)
 
     # Regla 4: POSSIBLE_WASTE
     is_high_ingest = dataset.ingest_gb_per_day >= high_ingest_threshold_gb
@@ -174,15 +194,17 @@ def classify(
         and not dataset.has_alert_action
         and not dataset.used_in_dashboards
     )
-    missing_for_zero_usage = unavailable_signals & SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE
     if is_high_ingest and has_zero_usage and missing_for_zero_usage:
         # Fase 3B, regla de seguridad (D013/D014): con evidencia completa
         # este dataset SERÍA POSSIBLE_WASTE, pero no se puede confirmar
         # "cero uso" porque una o más fuentes necesarias no están
         # disponibles -- la pérdida de visibilidad nunca puede producir una
-        # clasificación MÁS agresiva. Se degrada a REVIEW (peso 0.5 en el
-        # cálculo de ahorro, ver scoring/savings.py) en vez de
-        # POSSIBLE_WASTE (peso 1.0).
+        # clasificación MÁS agresiva. Se degrada a REVIEW, excluido del
+        # cálculo de ahorro (ver arriba y D015) en vez de contar con el
+        # peso 0.5 normal de REVIEW -- de lo contrario, un dataset que en
+        # realidad era HIGH_VALUE (peso 0 en ahorro) podría terminar
+        # aportando MÁS ahorro potencial estimado que con evidencia
+        # completa, exactamente el caso real que originó D015.
         missing_label = ", ".join(sorted(missing_for_zero_usage))
         return Classification.REVIEW, (
             f"This dataset ingests {dataset.ingest_gb_per_day:.1f} GB/day "
@@ -191,14 +213,14 @@ def classify(
             f"(insufficient visibility, not confirmed absence of usage). "
             f"Cannot confirm zero usage -- treated as REVIEW, not "
             f"POSSIBLE_WASTE, until those signals are available."
-        )
+        ), True
     if is_high_ingest and has_zero_usage:
         return Classification.POSSIBLE_WASTE, (
             f"This dataset appears as a candidate because it ingests "
             f"{dataset.ingest_gb_per_day:.1f} GB/day, has no interactive "
             f"searches in the last 90 days, and was not found in alerts, "
             f"dashboards, or scheduled saved searches."
-        )
+        ), False
 
     # Regla 5: REVIEW
     if has_zero_usage or dataset.interactive_searches_90d <= 2:
@@ -207,10 +229,10 @@ def classify(
             f"with limited observed usage "
             f"({dataset.interactive_searches_90d} interactive searches in "
             "90 days). Manual validation recommended before any action."
-        )
+        ), high_value_unconfirmable
 
     # Regla 6: NORMAL
     return Classification.NORMAL, (
         "This dataset shows a typical ingest-to-usage ratio for this "
         "environment. No action suggested."
-    )
+    ), False

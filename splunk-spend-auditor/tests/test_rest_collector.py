@@ -11,12 +11,18 @@ import httpx
 import pandas as pd
 import pytest
 
+from splunk_spend_auditor.analysis.build_datasets import build_datasets
 from splunk_spend_auditor.collector.rest_collector import (
+    IndexAccessProbe,
     RestCollectionError,
     RestConfig,
+    _index_pattern_matches,
+    _probe_index_access,
     collect,
 )
-from splunk_spend_auditor.models import SignalAvailability
+from splunk_spend_auditor.models import Classification, SignalAvailability
+from splunk_spend_auditor.scoring.classify_all import classify_all
+from splunk_spend_auditor.scoring.savings import compute_savings
 
 
 def _oneshot_response(results: list[dict], messages: list[dict] | None = None) -> httpx.Response:
@@ -41,12 +47,60 @@ def _saved_search_entry(name: str, owner: str, search: str = "index=main") -> di
     }
 
 
+def _current_context_response(roles: list[str]) -> httpx.Response:
+    return httpx.Response(
+        200, json={"entry": [{"content": {"username": "test-user", "roles": roles}}]}
+    )
+
+
+def _role_response(
+    allowed: list[str] | None = None,
+    disallowed: list[str] | None = None,
+    imported_allowed: list[str] | None = None,
+    imported_disallowed: list[str] | None = None,
+) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "entry": [
+                {
+                    "content": {
+                        "srchIndexesAllowed": allowed or [],
+                        "srchIndexesDisallowed": disallowed or [],
+                        "imported_srchIndexesAllowed": imported_allowed or [],
+                        "imported_srchIndexesDisallowed": imported_disallowed or [],
+                    }
+                }
+            ]
+        },
+    )
+
+
+# D015 (Fase 3B, resuelto): rol de prueba con acceso amplio -- usado como
+# default en los handlers base para que tests que no están probando D015
+# específicamente sigan viendo el comportamiento pre-existente (audit_searches
+# vacío -> AVAILABLE, cero confirmado).
+_PERMISSIVE_ROLE = "permissive_test_role"
+
+
+def _permissive_authz_routes(request: httpx.Request) -> httpx.Response | None:
+    if request.url.path == "/services/authentication/current-context":
+        return _current_context_response([_PERMISSIVE_ROLE])
+    if request.url.path == f"/services/authorization/roles/{_PERMISSIVE_ROLE}":
+        return _role_response(allowed=["*", "_*"])
+    return None
+
+
 def _ingest_only_handler(ingest_rows: list[dict]):
-    """Handler base: sirve `ingest` con éxito y una respuesta vacía/segura
-    para audit_searches, saved_searches y last_seen -- útil como punto de
-    partida en tests que solo quieren forzar el fallo de UNA fuente."""
+    """Handler base: sirve `ingest` con éxito, una respuesta vacía/segura
+    para audit_searches/saved_searches/last_seen, y un rol permisivo para el
+    preflight de acceso a `_audit` (D015) -- útil como punto de partida en
+    tests que solo quieren forzar el fallo de UNA fuente."""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        authz = _permissive_authz_routes(request)
+        if authz is not None:
+            return authz
         if request.url.path == "/services/search/jobs":
             body = request.content.decode()
             if "license_usage" in body:
@@ -65,6 +119,9 @@ def test_oneshot_search_coerces_fully_numeric_columns_to_numeric():
     falla con TypeError al hacer .agg(["mean"]) sobre una columna de texto."""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        authz = _permissive_authz_routes(request)
+        if authz is not None:
+            return authz
         if request.url.path == "/services/search/jobs":
             body = request.content.decode()
             if "license_usage" in body:
@@ -123,6 +180,9 @@ def test_saved_searches_excludes_splunk_bundled_content_owned_by_nobody():
     incluso cuando el entorno real del cliente está bien cubierto."""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        authz = _permissive_authz_routes(request)
+        if authz is not None:
+            return authz
         if request.url.path == "/services/search/jobs":
             return _oneshot_response([])
         if request.url.path == "/servicesNS/-/-/saved/searches":
@@ -252,6 +312,9 @@ class TestOptionalSourcesDegradeWithoutAbortingTheAudit:
 
     def test_saved_searches_timeout_degrades_to_error_without_aborting(self):
         def handler(request: httpx.Request) -> httpx.Response:
+            authz = _permissive_authz_routes(request)
+            if authz is not None:
+                return authz
             if request.url.path == "/services/search/jobs":
                 body = request.content.decode()
                 if "license_usage" in body:
@@ -305,7 +368,7 @@ class TestLastSeenEndToEnd:
                     return _oneshot_response(
                         [{"date": "2026-09-01", "index": "main", "sourcetype": "access", "gb": "1.0"}]
                     )
-                if "metadata" in body:
+                if "eventcount" in body:
                     return _oneshot_response(
                         [{"index": "main", "sourcetype": "access", "last_seen_days_ago": "0.2"}]
                     )
@@ -335,7 +398,7 @@ class TestLastSeenEndToEnd:
                             {"date": "2026-09-01", "index": "idx_b", "sourcetype": "st", "gb": "1.0"},
                         ]
                     )
-                if "metadata" in body:
+                if "eventcount" in body:
                     # Solo cubre idx_a -- idx_b falta (p.ej. truncado por map).
                     return _oneshot_response(
                         [{"index": "idx_a", "sourcetype": "st", "last_seen_days_ago": "0.2"}]
@@ -364,7 +427,7 @@ class TestLastSeenEndToEnd:
                     return _oneshot_response(
                         [{"date": "2026-09-01", "index": "billing", "sourcetype": "export", "gb": "1.0"}]
                     )
-                if "metadata" in body:
+                if "eventcount" in body:
                     return _oneshot_response(
                         [
                             {"index": "billing", "sourcetype": "export", "last_seen_days_ago": "0.1"},
@@ -386,7 +449,7 @@ class TestLastSeenEndToEnd:
                 body = request.content.decode()
                 if "license_usage" in body:
                     return _oneshot_response(_SAMPLE_INGEST_ROWS)
-                if "metadata" in body:
+                if "eventcount" in body:
                     raise httpx.ReadTimeout("timed out")
                 return _oneshot_response([])
             return _saved_searches_response([])
@@ -398,3 +461,356 @@ class TestLastSeenEndToEnd:
         assert collection.sources_available["last_seen"] == SignalAvailability.ERROR
         # El resto del audit sigue disponible -- no abortó.
         assert collection.ingest is not None
+
+
+class TestIndexPatternMatching:
+    """D015 (resuelto): la convención de Splunk de que un `"*"` bare no
+    concede acceso a índices internos, confirmada empíricamente contra el
+    laboratorio real -- ver docstring de `_index_pattern_matches`."""
+
+    def test_bare_wildcard_does_not_match_internal_index(self):
+        assert _index_pattern_matches("*", "_audit") is False
+
+    def test_bare_wildcard_matches_normal_index(self):
+        assert _index_pattern_matches("*", "main") is True
+
+    def test_underscore_wildcard_matches_internal_index(self):
+        assert _index_pattern_matches("_*", "_audit") is True
+
+    def test_exact_internal_index_name_matches(self):
+        assert _index_pattern_matches("_audit", "_audit") is True
+
+    def test_unrelated_prefix_does_not_match(self):
+        assert _index_pattern_matches("lsa_*", "_audit") is False
+
+
+class TestD015AuditIndexAccessProbe:
+    """D015 (resuelto): determina de forma determinista si el token actual
+    tiene acceso efectivo a `_audit` antes de confiar en un resultado vacío.
+    Los 3 estados conceptuales pedidos: access confirmed / access denied /
+    access cannot be established."""
+
+    # --- 1. _audit accesible + cero real -------------------------------
+
+    def test_confirmed_access_with_genuinely_empty_audit_is_available(self):
+        """Caso A del pedido: acceso confirmado + query vacía SÍ puede
+        representar cero real -- no se degrada."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            authz = _permissive_authz_routes(request)
+            if authz is not None:
+                return authz
+            if request.url.path == "/services/search/jobs":
+                body = request.content.decode()
+                if "license_usage" in body:
+                    return _oneshot_response(_SAMPLE_INGEST_ROWS)
+                return _oneshot_response([])  # audit_searches: vacío, pero con acceso confirmado
+            return _saved_searches_response([])
+
+        config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
+        collection = collect(config, "queries")
+
+        assert collection.sources_available["audit_searches"] == SignalAvailability.AVAILABLE
+        assert collection.audit_searches is not None
+        assert collection.audit_searches.empty
+        assert "audit_searches" not in collection.diagnostics
+
+    # --- 2. _audit explícitamente no permitido -------------------------
+
+    def test_denied_access_downgrades_to_unavailable_with_clear_reason(self):
+        """Caso B: el índice no está permitido -- la señal se marca no
+        disponible (UNAVAILABLE), NO como "0 búsquedas"."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/services/authentication/current-context":
+                return _current_context_response(["restricted_role"])
+            if request.url.path == "/services/authorization/roles/restricted_role":
+                # Igual que el laboratorio real: _internal + lsa_* propios,
+                # "*" heredado de "user" (que NO cubre índices internos).
+                return _role_response(
+                    allowed=["_internal", "lsa_*"], imported_allowed=["*"]
+                )
+            if request.url.path == "/services/search/jobs":
+                body = request.content.decode()
+                if "license_usage" in body:
+                    return _oneshot_response(_SAMPLE_INGEST_ROWS)
+                return _oneshot_response([])  # _audit "vacío" -- en realidad sin acceso
+            return _saved_searches_response([])
+
+        config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
+        collection = collect(config, "queries")
+
+        assert collection.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
+        assert collection.audit_searches is None
+        assert "_audit" in collection.diagnostics["audit_searches"]
+        assert "not have confirmed access" in collection.diagnostics["audit_searches"]
+
+    def test_disallow_overrides_a_broad_allow(self):
+        """Confirmado empíricamente contra el laboratorio real: un rol con
+        srchIndexesAllowed=["*","_*"] pero srchIndexesDisallowed=["_audit"]
+        NO puede buscar _audit -- disallow siempre gana."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/services/authentication/current-context":
+                return _current_context_response(["broad_but_disallowed"])
+            if request.url.path == "/services/authorization/roles/broad_but_disallowed":
+                return _role_response(allowed=["*", "_*"], disallowed=["_audit"])
+            if request.url.path == "/services/search/jobs":
+                body = request.content.decode()
+                if "license_usage" in body:
+                    return _oneshot_response(_SAMPLE_INGEST_ROWS)
+                return _oneshot_response([])
+            return _saved_searches_response([])
+
+        config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
+        collection = collect(config, "queries")
+
+        assert collection.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
+
+    # --- 3. autorización no determinable --------------------------------
+
+    def test_current_context_unreachable_is_undetermined_and_fails_safe(self):
+        """Caso C: no se puede establecer con confianza el acceso efectivo
+        (current-context inaccesible) -- fail-safe, nunca se asume cero."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/services/authentication/current-context":
+                return httpx.Response(403, json={"messages": [{"type": "ERROR", "text": "denied"}]})
+            if request.url.path == "/services/search/jobs":
+                body = request.content.decode()
+                if "license_usage" in body:
+                    return _oneshot_response(_SAMPLE_INGEST_ROWS)
+                return _oneshot_response([])
+            return _saved_searches_response([])
+
+        config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
+        collection = collect(config, "queries")
+
+        assert collection.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
+        assert "could not reliably confirm" in collection.diagnostics["audit_searches"]
+
+    def test_one_unreadable_role_among_several_is_undetermined(self):
+        """Un usuario puede tener varios roles propios -- si CUALQUIERA de
+        ellos no se puede leer con confianza, todo el resultado es
+        UNDETERMINED (fail-safe: nunca CONFIRMED con información parcial),
+        incluso si otro de sus roles sí habría permitido _audit."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/services/authentication/current-context":
+                return _current_context_response(["readable_role", "broken_role"])
+            if request.url.path == "/services/authorization/roles/readable_role":
+                return _role_response(allowed=["_audit"])
+            if request.url.path == "/services/authorization/roles/broken_role":
+                return httpx.Response(500, json={"messages": [{"type": "FATAL", "text": "boom"}]})
+            if request.url.path == "/services/search/jobs":
+                body = request.content.decode()
+                if "license_usage" in body:
+                    return _oneshot_response(_SAMPLE_INGEST_ROWS)
+                return _oneshot_response([])
+            return _saved_searches_response([])
+
+        config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
+        collection = collect(config, "queries")
+
+        assert collection.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
+
+    # --- 4. roles / imported roles afectan el cálculo efectivo ----------
+
+    def test_access_granted_only_via_imported_role_is_confirmed(self):
+        """El propio rol no tiene _audit en srchIndexesAllowed, pero SÍ lo
+        hereda de un rol importado -- Splunk ya resuelve esto en
+        imported_srchIndexesAllowed (confirmado con una cadena de 3 niveles
+        contra el laboratorio real) y el probe debe confiar en ese campo."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            authz_ctx = request.url.path == "/services/authentication/current-context"
+            if authz_ctx:
+                return _current_context_response(["imports_audit_role"])
+            if request.url.path == "/services/authorization/roles/imports_audit_role":
+                return _role_response(allowed=[], imported_allowed=["_audit", "lsa_*"])
+            if request.url.path == "/services/search/jobs":
+                body = request.content.decode()
+                if "license_usage" in body:
+                    return _oneshot_response(_SAMPLE_INGEST_ROWS)
+                return _oneshot_response([])
+            return _saved_searches_response([])
+
+        config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
+        collection = collect(config, "queries")
+
+        assert collection.sources_available["audit_searches"] == SignalAvailability.AVAILABLE
+
+    def test_second_role_grants_access_the_first_role_does_not(self):
+        """Acceso efectivo = UNIÓN de todos los roles propios del usuario --
+        si CUALQUIERA de sus roles permite _audit, hay acceso, aunque el
+        primero que se liste no lo permita."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/services/authentication/current-context":
+                return _current_context_response(["no_audit_role", "has_audit_role"])
+            if request.url.path == "/services/authorization/roles/no_audit_role":
+                return _role_response(allowed=["lsa_*"])
+            if request.url.path == "/services/authorization/roles/has_audit_role":
+                return _role_response(allowed=["_audit"])
+            if request.url.path == "/services/search/jobs":
+                body = request.content.decode()
+                if "license_usage" in body:
+                    return _oneshot_response(_SAMPLE_INGEST_ROWS)
+                return _oneshot_response([])
+            return _saved_searches_response([])
+
+        config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
+        collection = collect(config, "queries")
+
+        assert collection.sources_available["audit_searches"] == SignalAvailability.AVAILABLE
+
+
+class TestD015SafetyInvariantEndToEnd:
+    """D015 (resuelto): reproduce el pipeline completo (collect ->
+    build_datasets -> classify_all -> compute_savings) con un token
+    restringido, y demuestra los invariantes de seguridad pedidos: la
+    pérdida de acceso a `_audit` nunca aumenta la clasificación de
+    desperdicio ni el ahorro potencial estimado."""
+
+    _HIGH_VALUE_DATASET_INDEX = "billing"
+    _HIGH_VALUE_DATASET_SOURCETYPE = "export"
+
+    def _handler(self, *, grant_audit_access: bool):
+        """Simula un dataset que, con acceso completo a _audit, tiene 12
+        búsquedas interactivas reales (HIGH_VALUE) -- exactamente el
+        escenario real que originó D015 (lsa_high_value en el laboratorio
+        de Fase 3A/3B)."""
+
+        audit_rows = (
+            [
+                {
+                    "date": "2026-09-20",
+                    "user": "admin",
+                    "search_id": f"'179046{i}.{i}'",
+                    "is_scheduled": "false",
+                    "search_text": (
+                        f"'search index={self._HIGH_VALUE_DATASET_INDEX} "
+                        f"sourcetype={self._HIGH_VALUE_DATASET_SOURCETYPE} | stats count'"
+                    ),
+                }
+                for i in range(12)
+            ]
+            if grant_audit_access
+            else []
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/services/authentication/current-context":
+                return _current_context_response(["role_under_test"])
+            if request.url.path == "/services/authorization/roles/role_under_test":
+                if grant_audit_access:
+                    return _role_response(allowed=["*", "_*"])
+                return _role_response(allowed=[self._HIGH_VALUE_DATASET_INDEX, "_internal"])
+            if request.url.path == "/services/search/jobs":
+                body = request.content.decode()
+                if "license_usage" in body:
+                    return _oneshot_response(
+                        [
+                            {
+                                "date": "2026-09-26",
+                                "index": self._HIGH_VALUE_DATASET_INDEX,
+                                "sourcetype": self._HIGH_VALUE_DATASET_SOURCETYPE,
+                                "gb": "50.0",
+                            }
+                        ]
+                    )
+                if "eventcount" in body:
+                    return _oneshot_response([])
+                return _oneshot_response(audit_rows)
+            return _saved_searches_response([])
+
+        return handler
+
+    def _classified_datasets(self, *, grant_audit_access: bool):
+        config = RestConfig(
+            host="lab", token="t", transport=httpx.MockTransport(self._handler(grant_audit_access=grant_audit_access))
+        )
+        collection = collect(config, "queries")
+        datasets, summary = build_datasets(collection)
+        classify_all(
+            datasets,
+            environment_partial_unknown_ratio=summary.partial_or_unknown_ratio,
+            sources_available=summary.sources_available,
+        )
+        return datasets, summary
+
+    def test_full_access_reproduces_high_value_like_the_real_lab(self):
+        """Control: con acceso completo a _audit, el dataset SÍ debe llegar
+        a HIGH_VALUE (12 búsquedas >= HIGH_VALUE_SEARCH_THRESHOLD) --
+        replica lo observado con el token admin en el laboratorio real."""
+
+        datasets, _ = self._classified_datasets(grant_audit_access=True)
+        target = next(
+            d
+            for d in datasets
+            if d.key.index == self._HIGH_VALUE_DATASET_INDEX
+            and d.key.sourcetype == self._HIGH_VALUE_DATASET_SOURCETYPE
+        )
+        assert target.classification == Classification.HIGH_VALUE
+
+    def test_7_restricted_access_does_not_reclassify_high_value_as_possible_waste(self):
+        """7. Reproducción exacta del bug real que originó D015: con un
+        token restringido (sin acceso a _audit), el MISMO dataset que sería
+        HIGH_VALUE con visibilidad completa NUNCA debe convertirse en
+        POSSIBLE_WASTE -- debe degradar a REVIEW (D014) via UNAVAILABLE."""
+
+        datasets, summary = self._classified_datasets(grant_audit_access=False)
+        assert summary.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
+
+        target = next(
+            d
+            for d in datasets
+            if d.key.index == self._HIGH_VALUE_DATASET_INDEX
+            and d.key.sourcetype == self._HIGH_VALUE_DATASET_SOURCETYPE
+        )
+        assert target.classification != Classification.POSSIBLE_WASTE
+        assert target.classification == Classification.REVIEW
+
+    @staticmethod
+    def _waste_candidacy_weight(dataset) -> float:
+        """"Severidad" real de una clasificación para efectos de este
+        invariante: el peso con el que efectivamente contribuye al cálculo
+        de ahorro (scoring/savings.py), NO el nombre de la categoría. Un
+        REVIEW con excluded_from_savings_estimate=True pesa 0, igual que
+        HIGH_VALUE -- comparar solo por nombre de categoría (HIGH_VALUE=0 <
+        REVIEW=2 en cualquier orden fijo) daría un falso positivo aquí,
+        porque no todo REVIEW es igual de "agresivo" (ver D015 y
+        DECISIONS.md)."""
+
+        if dataset.classification == Classification.POSSIBLE_WASTE:
+            return 1.0
+        if dataset.classification == Classification.REVIEW and not dataset.excluded_from_savings_estimate:
+            return 0.5
+        return 0.0
+
+    def test_5_losing_audit_access_never_increases_waste_classification(self):
+        """5. La pérdida de _audit nunca puede producir una clasificación
+        MÁS agresiva que con visibilidad completa, para el mismo dataset --
+        medido por el peso real de "candidato a desperdicio" (0 / 0.5 / 1),
+        que es lo que el invariante pedido efectivamente protege (ver
+        DECISIONS.md D015)."""
+
+        full, _ = self._classified_datasets(grant_audit_access=True)
+        restricted, _ = self._classified_datasets(grant_audit_access=False)
+
+        full_ds = next(d for d in full if d.key.index == self._HIGH_VALUE_DATASET_INDEX)
+        restricted_ds = next(d for d in restricted if d.key.index == self._HIGH_VALUE_DATASET_INDEX)
+        assert restricted_ds.classification != Classification.POSSIBLE_WASTE
+        assert self._waste_candidacy_weight(restricted_ds) <= self._waste_candidacy_weight(full_ds)
+
+    def test_6_losing_audit_access_never_increases_potential_savings(self):
+        """6. Idem para el ahorro potencial estimado en dólares."""
+
+        full, _ = self._classified_datasets(grant_audit_access=True)
+        restricted, _ = self._classified_datasets(grant_audit_access=False)
+
+        savings_full = compute_savings(full, annual_spend=100_000)
+        savings_restricted = compute_savings(restricted, annual_spend=100_000)
+
+        assert savings_restricted.candidate_gb_day <= savings_full.candidate_gb_day
+        assert savings_restricted.potential_annual_saving <= savings_full.potential_annual_saving

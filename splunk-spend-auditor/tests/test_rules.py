@@ -66,12 +66,12 @@ class TestProtectedPatterns:
             interactive_searches_30d=50,
             parser_confidence=ParserConfidence.HIGH,
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.PROTECTED
 
     def test_manual_override_also_produces_protected(self):
         ds = _ds(is_protected=True, protection_reason="manual override test")
-        classification, explanation = classify(
+        classification, explanation, _ = classify(
             ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO
         )
         assert classification == Classification.PROTECTED
@@ -88,7 +88,7 @@ class TestUnknownIsEnvironmentLevel:
         mayoría de las búsquedas. NO debe quedar UNKNOWN -- debe llegar a
         POSSIBLE_WASTE (o REVIEW/NORMAL según ingest)."""
         ds = _ds(ingest_gb_per_day=50.0, parser_confidence=ParserConfidence.UNKNOWN)
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification != Classification.UNKNOWN
 
     def test_zero_evidence_dataset_in_poorly_covered_environment_is_unknown(self):
@@ -96,7 +96,7 @@ class TestUnknownIsEnvironmentLevel:
         no se pudieron resolver (muchas macros/eventtypes), SÍ debe quedar
         UNKNOWN -- no podemos confiar en el silencio."""
         ds = _ds(ingest_gb_per_day=50.0, parser_confidence=ParserConfidence.UNKNOWN)
-        classification, explanation = classify(
+        classification, explanation, _ = classify(
             ds, HIGH_INGEST_THRESHOLD, HIGH_PARTIAL_RATIO
         )
         assert classification == Classification.UNKNOWN
@@ -106,7 +106,7 @@ class TestUnknownIsEnvironmentLevel:
         """Justo en el umbral, NO se activa UNKNOWN (la comparación es '>',
         no '>=') -- ver rules.py."""
         ds = _ds(ingest_gb_per_day=50.0, parser_confidence=ParserConfidence.UNKNOWN)
-        classification, _ = classify(
+        classification, _, _ = classify(
             ds, HIGH_INGEST_THRESHOLD, UNKNOWN_ENVIRONMENT_RATIO_THRESHOLD
         )
         assert classification != Classification.UNKNOWN
@@ -118,19 +118,19 @@ class TestUnknownIsEnvironmentLevel:
             interactive_searches_30d=1,
             interactive_searches_90d=1,
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, HIGH_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, HIGH_PARTIAL_RATIO)
         assert classification != Classification.UNKNOWN
 
 
 class TestHighValue:
     def test_scheduled_search_is_high_value(self):
         ds = _ds(is_scheduled=True, parser_confidence=ParserConfidence.HIGH)
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.HIGH_VALUE
 
     def test_alert_action_is_high_value(self):
         ds = _ds(has_alert_action=True, parser_confidence=ParserConfidence.HIGH)
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.HIGH_VALUE
 
     def test_dashboard_usage_is_high_value_even_without_any_search_evidence(self):
@@ -138,7 +138,7 @@ class TestHighValue:
         el parser de SPL (viene de un CSV manual), pero SÍ debe ser
         HIGH_VALUE."""
         ds = _ds(used_in_dashboards=True, parser_confidence=ParserConfidence.UNKNOWN)
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.HIGH_VALUE
 
     def test_ten_or_more_interactive_searches_is_high_value(self):
@@ -146,7 +146,7 @@ class TestHighValue:
             interactive_searches_30d=10,
             parser_confidence=ParserConfidence.HIGH,
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.HIGH_VALUE
 
     def test_nine_interactive_searches_is_not_enough_alone(self):
@@ -156,7 +156,7 @@ class TestHighValue:
             ingest_gb_per_day=1.0,
             parser_confidence=ParserConfidence.HIGH,
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification != Classification.HIGH_VALUE
 
 
@@ -167,7 +167,7 @@ class TestPossibleWaste:
             interactive_searches_90d=0,
             parser_confidence=ParserConfidence.UNKNOWN,
         )
-        classification, explanation = classify(
+        classification, explanation, _ = classify(
             ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO
         )
         assert classification == Classification.POSSIBLE_WASTE
@@ -176,7 +176,7 @@ class TestPossibleWaste:
     def test_never_uses_delete_language(self):
         """Requisito explícito del brief: nunca 'DELETE THIS DATA'."""
         ds = _ds(ingest_gb_per_day=50.0, parser_confidence=ParserConfidence.UNKNOWN)
-        _, explanation = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        _, explanation, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert "delete" not in explanation.lower()
 
     def test_low_ingest_with_zero_usage_is_review_not_waste(self):
@@ -187,7 +187,7 @@ class TestPossibleWaste:
             interactive_searches_90d=0,
             parser_confidence=ParserConfidence.UNKNOWN,
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.REVIEW
 
     def test_high_ingest_but_scheduled_is_not_possible_waste(self):
@@ -196,7 +196,7 @@ class TestPossibleWaste:
             is_scheduled=True,
             parser_confidence=ParserConfidence.HIGH,
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.HIGH_VALUE
 
 
@@ -223,7 +223,7 @@ class TestSignalAvailabilityGating:
             has_alert_action=False,
             parser_confidence=ParserConfidence.UNKNOWN,
         )
-        classification, explanation = classify(
+        classification, explanation, excluded_from_savings = classify(
             ds,
             HIGH_INGEST_THRESHOLD,
             LOW_PARTIAL_RATIO,
@@ -233,6 +233,9 @@ class TestSignalAvailabilityGating:
         assert classification != Classification.POSSIBLE_WASTE
         assert "audit_searches" in explanation
         assert "saved_searches" in explanation
+        # D015: este REVIEW no tiene base real ni para el peso reducido
+        # normal -- ver test_savings.py y TestD015SafetyInvariantEndToEnd.
+        assert excluded_from_savings is True
 
     def test_missing_only_one_of_the_two_sources_still_blocks_possible_waste(self):
         """Basta con que UNA de las dos fuentes críticas falte -- no hace
@@ -248,7 +251,7 @@ class TestSignalAvailabilityGating:
                 "saved_searches": SignalAvailability.ERROR,
             }
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, unavailable)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, unavailable)
         assert classification == Classification.REVIEW
 
     def test_missing_dashboards_used_alone_does_not_block_possible_waste(self):
@@ -269,8 +272,30 @@ class TestSignalAvailabilityGating:
                 "dashboards_used": SignalAvailability.ERROR,
             }
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, unavailable)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, unavailable)
         assert classification == Classification.POSSIBLE_WASTE
+
+    def test_genuine_review_with_all_sources_available_is_not_excluded_from_savings(self):
+        """D015: excluded_from_savings_estimate es específico del caso donde
+        la MISMA señal faltante impidió confirmar HIGH_VALUE -- un REVIEW
+        genuino (todas las fuentes disponibles, evidencia real de uso bajo)
+        sigue contribuyendo con el peso 0.5 normal, sin cambios."""
+        ds = _ds(
+            ingest_gb_per_day=5.0,
+            interactive_searches_90d=1,
+            parser_confidence=ParserConfidence.HIGH,
+        )
+        available = unavailable_signals_from(
+            {
+                "audit_searches": SignalAvailability.AVAILABLE,
+                "saved_searches": SignalAvailability.AVAILABLE,
+            }
+        )
+        classification, _, excluded_from_savings = classify(
+            ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, available
+        )
+        assert classification == Classification.REVIEW
+        assert excluded_from_savings is False
 
     def test_all_sources_confirmed_available_still_reaches_possible_waste(self):
         """Con evidencia completa y confirmada, el comportamiento pre-3B se
@@ -287,7 +312,7 @@ class TestSignalAvailabilityGating:
                 "saved_searches": SignalAvailability.AVAILABLE,
             }
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, available)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, available)
         assert classification == Classification.POSSIBLE_WASTE
 
     def test_missing_signal_is_not_silently_treated_as_zero_signal(self):
@@ -308,11 +333,11 @@ class TestSignalAvailabilityGating:
             is_scheduled=False,  # ...pero nunca se pudo confirmar
             parser_confidence=ParserConfidence.UNKNOWN,
         )
-        classification_confirmed, _ = classify(
+        classification_confirmed, _, _ = classify(
             confirmed_zero, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO,
             self._unavailable(),
         )
-        classification_unconfirmed, _ = classify(
+        classification_unconfirmed, _, _ = classify(
             unconfirmed_zero, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO,
             self._unavailable("audit_searches", "saved_searches"),
         )
@@ -330,7 +355,7 @@ class TestNormal:
             interactive_searches_90d=5,
             parser_confidence=ParserConfidence.HIGH,
         )
-        classification, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
+        classification, _, _ = classify(ds, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO)
         assert classification == Classification.NORMAL
 
 

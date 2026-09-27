@@ -127,11 +127,20 @@ def _echo_degradation_notice(summary) -> None:
         if status
         in (SignalAvailability.UNAVAILABLE, SignalAvailability.PARTIAL, SignalAvailability.ERROR)
     ]
-    if degraded:
-        typer.secho(
-            f"Analysis completed with reduced confidence. Unavailable signals: {', '.join(degraded)}.",
-            fg=typer.colors.YELLOW,
-        )
+    if not degraded:
+        return
+    typer.secho(
+        f"Analysis completed with reduced confidence. Unavailable signals: {', '.join(degraded)}.",
+        fg=typer.colors.YELLOW,
+    )
+    # Fase 3B/D015: si hay una razón más específica que el nombre genérico
+    # de la fuente (p.ej. "no se pudo confirmar acceso a _audit"), mostrarla
+    # -- item 6: "qué señal falta; por qué importa; que el audit continúa
+    # de forma conservadora".
+    for source in degraded:
+        reason = summary.diagnostics.get(source)
+        if reason:
+            typer.secho(f"  - {source}: {reason}", fg=typer.colors.YELLOW)
 
 
 @app.command()

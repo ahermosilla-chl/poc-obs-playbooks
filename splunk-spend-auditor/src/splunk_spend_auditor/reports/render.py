@@ -140,7 +140,10 @@ def build_report_context(
         {
             "source": source,
             "status": status.value,
-            "label": _SIGNAL_STATUS_LABEL.get(status, status.value),
+            # Fase 3B/D015: `summary.diagnostics` trae una razón específica
+            # (p.ej. "no se pudo confirmar acceso a _audit") cuando hay algo
+            # más preciso que decir que la etiqueta genérica del estado.
+            "label": summary.diagnostics.get(source) or _SIGNAL_STATUS_LABEL.get(status, status.value),
             "degraded": status in _DEGRADED_SIGNAL_STATES,
         }
         for source, status in summary.sources_available.items()

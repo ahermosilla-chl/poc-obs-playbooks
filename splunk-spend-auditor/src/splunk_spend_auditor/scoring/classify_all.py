@@ -72,11 +72,12 @@ def classify_all(
     unavailable = unavailable_signals_from(sources_available)
 
     for dataset in datasets:
-        classification, explanation = classify(
+        classification, explanation, excluded_from_savings = classify(
             dataset, high_ingest_threshold, environment_partial_unknown_ratio, unavailable
         )
         dataset.classification = classification
         dataset.explanation = explanation
+        dataset.excluded_from_savings_estimate = excluded_from_savings
         dataset.data_value_score = data_value_score(dataset)
 
     return datasets

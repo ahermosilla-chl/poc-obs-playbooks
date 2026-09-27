@@ -100,51 +100,118 @@ tiene ninguna señal de error que capturar. Ver D015.
 
 ---
 
-## D015 — Limitación conocida: permisos de índice restringidos pueden simular "cero" sin ningún error (no resuelto)
+## D015 — RESUELTO: preflight de acceso efectivo a `_audit` antes de confiar en un resultado vacío
 
-**Contexto:** validado empíricamente en Fase 3B contra el laboratorio de
-Fase 3A. Se creó un rol Splunk real (`lsa_restricted`) con
-`srchIndexesAllowed=["_internal", "lsa_*"]` (sin `_audit`) y un token para un
-usuario con ese rol. La query `audit_interactive_searches.spl` contra
-`index=_audit` con ese token devuelve `HTTP 200`, `messages: []`,
+**Estado:** resuelto en la iteración dirigida a D015 (posterior a Fase 3B).
+La versión anterior de esta decisión (que documentaba la limitación como
+NO resuelta) queda reemplazada por lo siguiente.
+
+**Contexto original (Fase 3B):** se creó un rol Splunk real (`lsa_restricted`)
+con `srchIndexesAllowed=["_internal", "lsa_*"]` (sin `_audit`) y un token
+para un usuario con ese rol. La query `audit_interactive_searches.spl`
+contra `index=_audit` con ese token devuelve `HTTP 200`, `messages: []`,
 `results: []` -- Splunk aplica el scope de índices del rol en silencio, sin
-ningún error ni warning en la respuesta. Lo mismo aplica a
-`/servicesNS/-/-/saved/searches` sin la capability `list_settings`: puede
-devolver una lista reducida o vacía sin señal de error.
+ningún error ni warning en la respuesta. Con ese token, `lsa_high_value`
+(HIGH_VALUE real, confirmado con el token admin) se reclasificaba como
+`POSSIBLE_WASTE` -- D014 (que bloquea `POSSIBLE_WASTE` cuando
+`sources_available` marca una fuente como no-`AVAILABLE`) no cubría este
+caso porque, desde la perspectiva del collector, la fuente había respondido
+"exitosamente".
 
-**Impacto confirmado:** con ese token, `lsa_high_value` (HIGH_VALUE real con
-evidencia HIGH_VALUE confirmada usando el token admin) se reclasificó como
-`POSSIBLE_WASTE`. El mecanismo de D014 (bloquear `POSSIBLE_WASTE` cuando
-`sources_available` marca la fuente como no-`AVAILABLE`) **no cubre este
-caso** porque, desde la perspectiva del collector, la fuente respondió
-exitosamente -- no hay una excepción que capturar ni un status code de error
-que traducir a `ERROR`.
+**Investigación del modelo de autorización real de Splunk (empírica, contra
+el laboratorio, no solo documentación):**
+1. `/services/authorization/roles/<rol>` expone, además de los campos
+   propios (`srchIndexesAllowed`/`srchIndexesDisallowed`), los campos
+   `imported_srchIndexesAllowed`/`imported_srchIndexesDisallowed` -- Splunk
+   mismo resuelve ahí la herencia de TODA la cadena de `imported_roles`,
+   confirmado con una cadena de 3 niveles de roles importados y con una
+   búsqueda real exitosa contra `_audit` usando un token cuyo único camino
+   de acceso era heredado transitivamente. No hace falta caminar el grafo
+   de roles a mano.
+2. Un patrón `"*"` (bare wildcard) en `srchIndexesAllowed`/
+   `imported_srchIndexesAllowed` **no** concede acceso a índices internos
+   (`_audit`, `_internal`, etc.) -- confirmado porque el rol base `"user"`
+   (heredado por `lsa_restricted`) tiene `srchIndexesAllowed=["*"]` y NO
+   otorgaba acceso a `_audit`, mientras que el rol `admin` de Splunk agrega
+   explícitamente `"_*"` ADEMÁS de `"*"` en su propio `srchIndexesAllowed`.
+3. `srchIndexesDisallowed` siempre gana sobre `srchIndexesAllowed`, sin
+   importar cuán amplio sea el allow -- confirmado con un rol
+   `srchIndexesAllowed=["*","_*"]` + `srchIndexesDisallowed=["_audit"]` que
+   seguía sin poder buscar `_audit`.
+4. El acceso efectivo de un usuario es la UNIÓN de TODOS sus roles propios
+   (no solo `imported_roles` dentro de un rol) -- confirmado dándole a un
+   usuario dos roles, uno sin `_audit` y otro con `_audit`, y verificando
+   acceso real.
 
-**Decisión: NO se implementa una corrección automática en Fase 3B.** Se
-evaluó consultar `/services/authentication/current-context` +
-`/services/authorization/roles/<rol>` para inferir de antemano si el token
-tiene acceso a `_audit`/`list_settings`, y se descartó por ahora: la
-resolución de permisos efectivos de Splunk (roles importados, unión vs.
-intersección de `srchIndexesAllowed` entre roles heredados, wildcards `*` vs
-`_*`) no se pudo verificar con suficiente confianza en el tiempo disponible
-de esta fase como para justificar un heurístico que podría, si está mal
-calibrado, introducir el problema inverso (marcar como "no disponible" un
-token que en realidad sí tiene acceso completo). Un heurístico probablemente
-incorrecto es peor que un límite documentado honestamente.
+**Decisión:** `rest_collector.py` agrega un preflight determinista (NO
+heurístico) antes de confiar en un resultado vacío de
+`audit_interactive_searches.spl`:
+- Si la query devuelve **alguna fila**, es evidencia positiva inequívoca --
+  se usa directamente, sin ningún preflight (ahorra las llamadas extra en
+  el caso común).
+- Si devuelve **cero filas**, se resuelve `_probe_index_access()`: obtiene
+  los roles del usuario actual (`/services/authentication/current-context`)
+  y, para cada uno, el conjunto efectivo allow/disallow (propio + heredado,
+  vía los campos `imported_*`). Devuelve `CONFIRMED` / `DENIED` /
+  `UNDETERMINED`.
+  - `CONFIRMED` → el resultado vacío es un cero real, `AVAILABLE`.
+  - `DENIED` o `UNDETERMINED` → `UNAVAILABLE`, con una razón legible
+    específica en `RawCollection.diagnostics["audit_searches"]` (nunca
+    "cero búsquedas").
+- **Fail-safe explícito:** si CUALQUIER rol del usuario no se puede leer
+  con confianza (red, permisos, respuesta inesperada), todo el resultado es
+  `UNDETERMINED` -- nunca se declara `CONFIRMED` con información parcial.
 
-**Mitigación aplicada, no automática:** ninguna en código todavía. Queda como
-pendiente explícito (ver PROJECT_STATUS.md, "Pendientes de Fase 3B") con una
-recomendación concreta para cuando se aborde: probar
-`current-context.roles` + `authorization/roles/<rol>.srchIndexesAllowed` con
-`fnmatch` contra `_audit`, limitado a los roles DIRECTOS del usuario (sin
-resolver la cadena completa de `imported_roles`), documentado explícitamente
-como heurístico best-effort, no como garantía.
+**Segundo hallazgo durante la implementación -- refinamiento necesario de
+D014, no solo de D015:** el primer intento de esta corrección (degradar a
+`REVIEW`, igual que D014) todavía violaba el invariante de que "perder
+visibilidad nunca puede aumentar el ahorro potencial estimado": un dataset
+que sería `HIGH_VALUE` (peso 0 en `compute_savings`) pasaba a `REVIEW`
+(peso 0.5) al perder `_audit` -- el ahorro potencial subía de $0 a un
+número positivo, exactamente en la dirección prohibida, aunque la
+*clasificación* nominal (REVIEW, no POSSIBLE_WASTE) pareciera segura. Se
+agregó `Dataset.excluded_from_savings_estimate: bool` (ver
+`models/__init__.py`, `scoring/rules.py`, `scoring/savings.py`): cuando
+D014 degrada a `REVIEW` específicamente porque la señal faltante también
+podría haber confirmado `HIGH_VALUE` (rule 3), ese `REVIEW` no contribuye
+NADA al cálculo de ahorro (ni el peso 0.5 normal) -- solo un `REVIEW`
+respaldado por evidencia real y disponible conserva el peso 0.5. Esto NO es
+scope creep de D015: es una corrección necesaria para que la propiedad de
+seguridad que D014 pretendía garantizar sea cierta en todos los casos, no
+solo en el caso `POSSIBLE_WASTE` directo.
 
-**Recomendación operativa mientras tanto (documentada, no forzada por
-código):** el token REST usado con este producto debería tener acceso de
-lectura a `_audit` y la capability `list_settings` -- la misma
-recomendación que ya hacía `docs/splunk-data-sources.md` para el modo REST,
-ahora con evidencia empírica concreta de qué pasa si no se cumple.
+**Validado con datos reales de `sample-data/case_mixed`:** quitando
+`audit_searches.csv`, el ahorro potencial estimado ahora es **0.0% / $0**
+(antes de este refinamiento, Fase 3B reportaba 21.6% / $20,296 -- ese
+número queda superado/corregido por este hallazgo, ver PROJECT_STATUS.md).
+$0 es la respuesta conservadora correcta: sin `audit_searches`, ningún
+candidato puede confirmarse con evidencia suficiente.
+
+**Validado contra el laboratorio Splunk real (no solo mocks):** con el
+token admin (acceso completo), `lsa_high_value` clasifica `HIGH_VALUE`. Con
+el token `lsa_restricted` (sin `_audit`), el mismo dataset clasifica
+`REVIEW` (nunca `POSSIBLE_WASTE`), el CLI muestra el aviso de confianza
+reducida con la razón específica ("current credentials do not have
+confirmed access to _audit..."), y "Optimization candidates: 0.0 GB/day".
+
+**Limitación conocida y aceptada (no bloqueante):** el preflight cubre
+específicamente `_audit` (alcance de esta iteración). El riesgo análogo
+para `saved_searches`/capability `list_settings` (mencionado en la versión
+original de D015) sigue sin un preflight equivalente -- permanece como
+recomendación operativa (token con `list_settings`), no como corrección de
+código. También queda fuera de alcance el caso, estructuralmente
+indetectable vía esta API, de que una query de referencia a un campo que no
+existe en la versión del cliente devuelva `200`/`[]` sin error (schema
+drift) -- no relacionado con permisos de índice.
+
+**Tests:** `tests/test_rest_collector.py::TestIndexPatternMatching`,
+`TestD015AuditIndexAccessProbe` (7 tests: acceso confirmado, denegado,
+indeterminado, un rol ilegible entre varios, disallow gana sobre allow
+amplio, acceso solo vía rol heredado, acceso vía un segundo rol propio) y
+`TestD015SafetyInvariantEndToEnd` (reproduce el caso real HIGH_VALUE →
+POSSIBLE_WASTE y demuestra que ya no ocurre, más los invariantes de
+clasificación y ahorro). `tests/test_rules.py` agrega verificación directa
+de `excluded_from_savings_estimate`.
 
 ---
 

@@ -44,8 +44,22 @@ def compute_savings(
         for d in datasets
         if d.classification == Classification.REVIEW
     )
+    # Fase 3B/D015: un REVIEW con excluded_from_savings_estimate=True no
+    # tiene base real para contribuir NI SIQUIERA el peso reducido de
+    # REVIEW -- la misma señal faltante que impidió confirmar "cero uso"
+    # también podría haber confirmado HIGH_VALUE (peso 0). Sin esto, perder
+    # visibilidad de una fuente crítica podía INCREMENTAR el ahorro
+    # potencial estimado -- exactamente el caso real que originó D015. Ver
+    # models.Dataset.excluded_from_savings_estimate y scoring/rules.py.
+    # `review_gb_day` (arriba) sigue siendo el total informativo sin
+    # excluir nada -- ver docs/report-design.md.
+    review_gb_day_weighted = sum(
+        d.ingest_gb_per_day
+        for d in datasets
+        if d.classification == Classification.REVIEW and not d.excluded_from_savings_estimate
+    )
 
-    candidate_gb_day = possible_waste_gb_day + REVIEW_WEIGHT * review_gb_day
+    candidate_gb_day = possible_waste_gb_day + REVIEW_WEIGHT * review_gb_day_weighted
 
     potential_reduction_pct = (
         candidate_gb_day / current_ingest_gb_day if current_ingest_gb_day > 0 else 0.0

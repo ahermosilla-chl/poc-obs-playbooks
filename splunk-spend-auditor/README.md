@@ -68,9 +68,11 @@ splunk-spend-auditor audit --host <tu-splunk> --port 8089
 
 El token nunca se pasa como argumento de línea de comandos ni se escribe a
 disco (ver `docs/security.md`). Requiere que el rol del token tenga acceso a
-`_internal` y, para resultados confiables, también a `_audit` y la
-capability `list_settings` — ver `DECISIONS.md` D015 para una limitación
-conocida cuando el token no tiene ese acceso.
+`_internal`. Si no tiene acceso a `_audit`, el CLI lo detecta automáticamente
+(no asume "cero búsquedas") y degrada la clasificación de forma conservadora
+en vez de arriesgar un falso `POSSIBLE_WASTE` — ver `DECISIONS.md` D015. Para
+resultados con máxima cobertura, el token debería tener también acceso a
+`_audit` y la capability `list_settings`.
 
 ## Estructura del repositorio
 

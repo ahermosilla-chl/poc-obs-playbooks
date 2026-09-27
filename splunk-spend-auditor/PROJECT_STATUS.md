@@ -1,18 +1,21 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 3B (MVP reliability & graceful degradation)
+Última actualización: D015 resuelto (iteración corta posterior a Fase 3B)
 
 ## Estado actual
 
-**Fase 2 completada. Fase 3A completada. Fase 3B completada — GO condicional
-(ver "Pendientes" abajo).** El MVP técnico (Fase 2) está construido, probado
-y validado end-to-end contra un escenario sintético. Fase 3A validó ese mismo
-diseño contra una instancia Splunk Enterprise real y encontró y corrigió 3
-bugs reales (D010/D011/D012). Fase 3B endureció el pipeline completo contra
-pérdida de señales, errores REST reales, y encontró y corrigió un bug de
-seguridad crítico (D014) más una limitación real no resuelta (D015) -- ver
-sección "Fase 3B" abajo. Fase 3C (reporte con datos reales) es el próximo
-paso y todavía no empezó.
+**Fase 2 completada. Fase 3A completada. Fase 3B completada. D015 resuelto.**
+El MVP técnico (Fase 2) está construido, probado y validado end-to-end
+contra un escenario sintético. Fase 3A validó ese mismo diseño contra una
+instancia Splunk Enterprise real y encontró y corrigió 3 bugs reales
+(D010/D011/D012). Fase 3B endureció el pipeline completo contra pérdida de
+señales y errores REST reales, y encontró y corrigió un bug de seguridad
+crítico (D014). La revisión de Fase 3B quedó en `MODIFY` con D015 como único
+blocker; una iteración corta posterior resolvió D015 con un preflight
+determinista de autorización (ver sección "D015" abajo) y, en el proceso,
+encontró y corrigió un segundo problema relacionado (el ahorro potencial
+podía subir en un caso específico que D014 no cubría del todo). Fase 3C
+(reporte con datos reales) es el próximo paso y todavía no empezó.
 
 ## Fase 3B — MVP Reliability & Graceful Degradation (COMPLETADA)
 
@@ -75,22 +78,15 @@ como se esperaba desde el cierre de Fase 3A).
    completo mostrado al usuario por defecto. Ahora se envuelve en
    `RestCollectionError` con mensaje accionable.
 
-**Limitación real encontrada, NO resuelta (D015):** un token con
-`srchIndexesAllowed` restringido (sin `_audit`) recibe `HTTP 200` con
-`results: []` al consultar `_audit` -- indistinguible de "cero búsquedas
-reales" a nivel de API. Confirmado contra el laboratorio real: con un token
-así, un dataset `HIGH_VALUE` confirmado (12 búsquedas reales con el token
-admin) se reclasificó como `POSSIBLE_WASTE`. El mecanismo de D014 no cubre
-este caso porque no hay ningún error que capturar. Ver D015 para el análisis
-completo y por qué no se implementó una corrección automática esta fase.
+**Limitación encontrada en Fase 3B, RESUELTA en la iteración posterior
+(D015):** un token con `srchIndexesAllowed` restringido (sin `_audit`)
+recibía `HTTP 200` con `results: []` al consultar `_audit` -- indistinguible
+de "cero búsquedas reales" a nivel de API, y un dataset `HIGH_VALUE`
+confirmado se reclasificaba como `POSSIBLE_WASTE`. Ver sección "D015" abajo
+para la resolución completa.
 
-**Tests:** 95 passing (72 baseline + 23 nuevos: 6 de
-`TestSignalAvailabilityGating`, 1 de `test_losing_visibility_never_increases_potential_savings`,
-2 de `test_protected_overrides_availability...`, 14 de hardening del
-collector REST en `tests/test_rest_collector.py`, 2 de
-`tests/test_architecture_boundaries.py`). Todos con `httpx.MockTransport` --
-ninguno depende de red/Docker/Splunk real. Cero regresiones sobre el
-baseline de 72.
+**Tests (al cierre de Fase 3B, antes de D015):** 95 passing (72 baseline +
+23 nuevos). Ver sección "D015" para el conteo final tras su resolución.
 
 **Validado contra Splunk real (laboratorio de Fase 3A, sigue vivo):**
 - `audit --host localhost --port 8089` end-to-end contra el laboratorio: las
@@ -101,30 +97,82 @@ baseline de 72.
 - Host inaccesible / connection refused (real, no mockeado) -> mismo
   comportamiento.
 - Rol Splunk real con `srchIndexesAllowed` restringido (sin `_audit`) creado
-  específicamente para esta validación -> encontró D015 (arriba).
+  específicamente para esta validación -> encontró D015 (resuelto después,
+  ver abajo).
 - Todo lo demás (401/403/404/429/5xx, timeouts de red, JSON malformado,
   query con mensaje FATAL) está cubierto por `httpx.MockTransport`, no
   reproducido contra el laboratorio real (no todos esos escenarios son
   seguros/prácticos de forzar contra una instancia real compartida).
 
-## Pendientes de Fase 3B (reales, no triviales)
+## D015 — Resuelto (iteración corta posterior a Fase 3B)
 
-1. **D015** -- permisos de índice restringidos que devuelven `200`/`[]` en
-   vez de un error no se detectan. Recomendación concreta para cuando se
-   aborde: sondear `current-context.roles` +
-   `authorization/roles/<rol>.srchIndexesAllowed` con `fnmatch`, limitado a
-   roles directos (sin resolver `imported_roles` recursivamente), como
-   heurístico best-effort explícitamente etiquetado como tal.
+**Objetivo:** la revisión de Fase 3B quedó en `MODIFY` con D015 como único
+blocker. Esta iteración lo resolvió con un preflight determinista (no
+heurístico) de autorización efectiva contra `_audit`, en vez de solo
+documentarlo como limitación -- ver DECISIONS.md D015 (reemplazada
+íntegramente, incluye el modelo de autorización investigado contra el
+laboratorio real: roles propios + heredados, wildcards `*` vs `_*` para
+índices internos, precedencia de `srchIndexesDisallowed`, unión de acceso
+entre múltiples roles de un mismo usuario).
+
+**Cambios:** `collector/rest_collector.py` (nuevo `_probe_index_access` +
+`IndexAccessProbe`, invocado solo cuando `audit_interactive_searches.spl`
+devuelve 0 filas -- un resultado no vacío ya es evidencia positiva y no
+necesita preflight), `models/__init__.py` (`Dataset.excluded_from_savings_estimate`,
+`RawCollection`/`EnvironmentSummary.diagnostics`), `scoring/rules.py`
+(`classify()` ahora devuelve un tercer valor `excluded_from_savings`),
+`scoring/savings.py` (un `REVIEW` marcado `excluded_from_savings_estimate`
+no contribuye al peso 0.5 normal), `reports/render.py` + `cli.py` (la razón
+específica de `diagnostics` se muestra en el reporte y en la terminal, no
+solo el nombre de la fuente).
+
+**Segundo problema encontrado y corregido en el camino (no solo D015):**
+el primer intento (degradar a `REVIEW` con peso 0.5, igual que D014) seguía
+permitiendo que el ahorro potencial estimado SUBIERA en el caso donde la
+señal faltante era la ÚNICA vía hacia `HIGH_VALUE` (peso 0) -- confirmado
+con un test de regresión propio antes de corregirlo. Se agregó
+`Dataset.excluded_from_savings_estimate` para que ese `REVIEW` específico
+no aporte nada al ahorro. Esto refina D014, no lo revierte.
+
+**Validado con datos reales (`sample-data/case_mixed`):** quitando
+`audit_searches.csv`, el ahorro potencial ahora es **0.0% / $0**
+(corrige el 21.6% / $20,296 reportado al cierre de Fase 3B, que no
+contaba con este segundo hallazgo).
+
+**Validado contra el laboratorio Splunk real:** con el token admin,
+`lsa_high_value` -> `HIGH_VALUE`. Con el token `lsa_restricted` (sin
+`_audit`), el mismo dataset -> `REVIEW` (nunca `POSSIBLE_WASTE`), el CLI y
+el reporte muestran la razón específica ("current credentials do not have
+confirmed access to _audit..."), y "Optimization candidates: 0.0 GB/day".
+
+**Tests:** 112 passing (95 al cierre de Fase 3B + 17 nuevos: 5 de
+`TestIndexPatternMatching`, 7 de `TestD015AuditIndexAccessProbe`, 5 de
+`TestD015SafetyInvariantEndToEnd` en `tests/test_rest_collector.py`, más 2
+en `tests/test_rules.py` para `excluded_from_savings_estimate`). Cero
+regresiones sobre el baseline de 95. Todos con `httpx.MockTransport`
+excepto la validación manual adicional contra el laboratorio real.
+
+## Pendientes (reales, no triviales)
+
+1. El riesgo análogo a D015 para `saved_searches`/capability `list_settings`
+   (puede devolver una lista reducida sin error) no tiene un preflight
+   equivalente -- alcance explícito de esta iteración fue solo `_audit`.
+   Recomendación operativa documentada (token con `list_settings`), sin
+   corrección de código todavía.
 2. `protected_overrides` no tiene forma de proveerse en modo REST (solo
    existe como archivo dentro del directorio `--from-csv`). Gap menor, no
    bloqueante.
 3. El residual conocido desde D010 (2 saved searches de sistema de la app
    `audit_trail` con `owner=admin` que sobreviven el filtro) sigue
-   presente -- en la validación de Fase 3B contra el laboratorio aparece
-   como `_audit:audittrail`, correctamente clasificado `PROTECTED` por el
+   presente -- en la validación contra el laboratorio aparece como
+   `_audit:audittrail`, correctamente clasificado `PROTECTED` por el
    patrón de nombre, impacto nulo confirmado.
 4. No se validó el modo REST contra Splunk Cloud (solo Enterprise vía
    Docker) ni a escala de producción -- mismo alcance que Fase 3A.
+5. Schema drift (una query que referencia un campo inexistente en la
+   versión del cliente devuelve `200`/`[]` sin error) sigue siendo
+   estructuralmente indetectable vía esta API -- no relacionado con
+   permisos de índice, fuera de alcance de D015.
 
 ## Fase 3A — Validación contra Splunk real de laboratorio (COMPLETADA)
 
@@ -305,13 +353,13 @@ resuelve con el mecanismo manual de `protected_overrides.txt`.
 
 **Fase 3C (reporte real) — no iniciada:**
 1. Generar quickscan + audit completo (HTML/Markdown) usando datos del
-   laboratorio de Fase 3A/3B.
+   laboratorio de Fase 3A/3B, ahora con D015 resuelto.
 2. Revisión manual del HTML para un Splunk Admin/Platform Engineer/manager/FinOps.
 
-**Fase 3B, pendiente real no bloqueante (ver D015 y "Pendientes de Fase
-3B" arriba):**
-- Heurístico best-effort para detectar permisos de índice restringidos que
-  devuelven `200`/`[]` en vez de un error explícito.
+**Pendiente real no bloqueante (ver "Pendientes" arriba):**
+- Preflight equivalente al de D015 para `saved_searches`/`list_settings`,
+  si en el futuro se confirma el mismo tipo de riesgo (hoy solo recomendado
+  operativamente, no implementado).
 
 **Más adelante:**
 - Publicar el Quickscan gratuito según `docs/validation-plan.md`.
@@ -328,15 +376,16 @@ resuelve con el mecanismo manual de `protected_overrides.txt`.
   en `docs/product-spec.md`, pero el precio final es una decisión de negocio).
 - Si se usará una cuenta de Splunk real de producción para pruebas futuras, o
   se sigue trabajando contra laboratorios efímeros como el de Fase 3A/3B.
-- Si D015 (permisos restringidos que simulan "cero" sin error) se aborda con
-  el heurístico best-effort propuesto, o se documenta solo como
-  recomendación operativa (token con acceso amplio) indefinidamente.
+- Si se justifica extender el preflight de D015 a `saved_searches`/
+  `list_settings`, o basta con la recomendación operativa documentada.
 
-## Recomendación de cierre de Fase 3B
+## Recomendación de cierre de Fase 3B / D015
 
-Ver el informe estructurado entregado al usuario al cierre de esta fase
-(sección L, "Recomendación") para el detalle completo. Resumen: el diseño
-central (D002, D004, D009) sigue sin necesitar cambios de fondo; Fase 3B
-corrigió un bug de seguridad real (D014) y encontró una limitación real no
-resuelta (D015) que no bloquea avanzar pero debe quedar visible antes de
-Fase 3C.
+Ver el informe estructurado entregado al usuario al cierre de la iteración
+de D015 (sección J, "Recomendación") para el detalle completo. Resumen: el
+diseño central (D002, D004, D009) sigue sin necesitar cambios de fondo;
+Fase 3B corrigió un bug de seguridad real (D014); la iteración de D015
+resolvió el único blocker que dejó esa fase con un preflight determinista
+(no heurístico) validado contra Splunk real, y en el camino encontró y
+corrigió un segundo problema relacionado con el mismo invariante de
+seguridad (ahorro potencial). Sin blockers conocidos para Fase 3C.

@@ -114,6 +114,15 @@ class Dataset:
     data_value_score: int | None = None
     explanation: str | None = None
 
+    # Fase 3B/D015: True cuando este dataset cayó en REVIEW específicamente
+    # porque D014 bloqueó POSSIBLE_WASTE por falta de una señal crítica (no
+    # porque haya evidencia real de uso bajo/ambiguo). En ese caso el
+    # dataset podría en realidad ser HIGH_VALUE (la misma señal faltante es
+    # la que habría confirmado eso) -- no hay base real para asignarle NI
+    # SIQUIERA el peso reducido de REVIEW normal en el cálculo de ahorro
+    # potencial (scoring/savings.py). Ver DECISIONS.md D015.
+    excluded_from_savings_estimate: bool = False
+
 
 @dataclass
 class EnvironmentSummary:
@@ -125,3 +134,6 @@ class EnvironmentSummary:
     partial_or_unknown_ratio: float = 0.0
     lookback_days: int = 90
     sources_available: dict[str, SignalAvailability] = field(default_factory=dict)
+    # Fase 3B/D015 -- razón legible por humanos para una fuente degradada,
+    # cuando hay algo más específico que decir que el estado genérico.
+    diagnostics: dict[str, str] = field(default_factory=dict)

@@ -5,7 +5,10 @@ ESTADO: validado en Fase 3A contra una instancia Splunk Enterprise 10.4.3
 real (Trial license, laboratorio Docker) -- ver PROJECT_STATUS.md y
 DECISIONS.md D010/D011/D012. Endurecido en Fase 3B (D013/D014) contra fallos
 reales de red/autenticación/permisos y contra la pérdida silenciosa de
-señales -- ver PROJECT_STATUS.md, sección "Fase 3B".
+señales. D015 (permisos de índice restringidos que devuelven `200`/`[]` sin
+error para `_audit`) resuelto con un preflight determinista de autorización
+efectiva (`_probe_index_access`) -- ver DECISIONS.md D015 para el modelo
+completo, validado contra el laboratorio real.
 
 Principio rector de Fase 3B (docs/architecture.md, "Manejo de errores"):
 la ausencia de una señal NUNCA se convierte en "la señal vale cero". Cada
@@ -26,9 +29,11 @@ Principios de seguridad aplicados aquí (ver docs/security.md):
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 import httpx
@@ -43,6 +48,8 @@ _SEARCH_JOBS_ENDPOINT = "/services/search/jobs"
 # Wildcard de user/app -- ver docs/splunk-data-sources.md sección 3, "gotcha
 # de scoping": sin esto se pierden saved searches de otros usuarios/apps.
 _SAVED_SEARCHES_ENDPOINT = "/servicesNS/-/-/saved/searches"
+_CURRENT_CONTEXT_ENDPOINT = "/services/authentication/current-context"
+_ROLES_ENDPOINT = "/services/authorization/roles"
 
 # Errores de transporte/red (connection refused, DNS, timeout, TLS) -- todos
 # son subclases de httpx.RequestError. HTTPStatusError (401/403/404/429/5xx)
@@ -103,6 +110,144 @@ def _describe_rest_error(exc: Exception, context: str) -> str:
     if isinstance(exc, ValueError):
         return f"Respuesta de Splunk malformada (JSON inválido) obteniendo {context}."
     return f"Error inesperado obteniendo {context}: {exc}"
+
+
+class IndexAccessProbe(str, Enum):
+    """D015 (Fase 3B, resuelto): resultado de determinar si el token actual
+    tiene acceso efectivo de búsqueda a un índice dado, ANTES de confiar en
+    un resultado vacío como "cero real". Ver docstring de
+    `_probe_index_access` para el porqué y la evidencia empírica.
+
+    - CONFIRMED: se pudo resolver el conjunto efectivo de patrones
+      allow/disallow de TODOS los roles del usuario (directos + heredados,
+      ya resueltos por Splunk mismo en `imported_srchIndexesAllowed`/
+      `imported_srchIndexesDisallowed`) y el índice está permitido.
+    - DENIED: idem, pero el índice NO está permitido (ningún patrón allow
+      lo cubre, o un patrón disallow lo bloquea explícitamente -- disallow
+      siempre gana, confirmado empíricamente).
+    - UNDETERMINED: no se pudo resolver el conjunto efectivo con confianza
+      (current-context inaccesible, algún rol no se pudo leer, respuesta
+      inesperada). Fail-safe: se trata igual que DENIED en cuanto a NO
+      confiar en un resultado vacío -- nunca se interpreta como "acceso
+      confirmado" por default."""
+
+    CONFIRMED = "CONFIRMED"
+    DENIED = "DENIED"
+    UNDETERMINED = "UNDETERMINED"
+
+
+def _index_pattern_matches(pattern: str, index_name: str) -> bool:
+    """Replica la convención de Splunk confirmada empíricamente contra el
+    laboratorio real (Splunk Enterprise 10.4.3): un patrón `"*"` (bare
+    wildcard) por sí solo NO concede acceso a índices internos (que
+    empiezan con `_`, p.ej. `_audit`) -- se requiere un patrón que empiece
+    con `_` (p.ej. `"_*"`, `"_audit"`) o el nombre exacto. Se comprobó
+    creando un rol con `imported_srchIndexesAllowed=["*"]` (heredado del
+    rol base "user") y confirmando que NO otorga acceso a `_audit`, y que
+    el rol `admin` de Splunk agrega explícitamente `"_*"` ADEMÁS de `"*"`
+    en su propio `srchIndexesAllowed` -- si `"*"` ya cubriera índices
+    internos, ese segundo patrón sería redundante.
+
+    Para cualquier otro patrón, se usa `fnmatch` estándar (case-sensitive,
+    como los nombres de index en Splunk)."""
+
+    if pattern == "*" and index_name.startswith("_"):
+        return False
+    return fnmatch.fnmatchcase(index_name, pattern)
+
+
+def _current_user_roles(client: httpx.Client) -> list[str] | None:
+    """None si no se pudo determinar con confianza -- nunca se asume una
+    lista vacía/default en caso de error (ver IndexAccessProbe.UNDETERMINED)."""
+
+    try:
+        response = client.get(_CURRENT_CONTEXT_ENDPOINT, params={"output_mode": "json"})
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+        logger.debug("current-context no disponible: %s", exc, exc_info=True)
+        return None
+
+    entries = payload.get("entry", [])
+    if not entries:
+        return None
+    roles = entries[0].get("content", {}).get("roles")
+    if not roles:
+        return None
+    return list(roles)
+
+
+def _role_index_patterns(client: httpx.Client, role: str) -> tuple[set[str], set[str]] | None:
+    """Devuelve (allowed_patterns, disallowed_patterns) EFECTIVOS para un
+    rol -- unión de lo propio (`srchIndexesAllowed`/`srchIndexesDisallowed`)
+    y lo heredado de su cadena COMPLETA de `imported_roles` (Splunk mismo
+    resuelve la herencia transitiva en `imported_srchIndexesAllowed`/
+    `imported_srchIndexesDisallowed`; confirmado empíricamente contra el
+    laboratorio con una cadena de 3 niveles de roles importados -- no hace
+    falta que este código camine el grafo de roles a mano).
+
+    None si el rol no se pudo leer con confianza."""
+
+    try:
+        response = client.get(f"{_ROLES_ENDPOINT}/{role}", params={"output_mode": "json"})
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+        logger.debug("rol '%s' no disponible: %s", role, exc, exc_info=True)
+        return None
+
+    entries = payload.get("entry", [])
+    if not entries:
+        return None
+    content = entries[0].get("content", {})
+    allowed = set(content.get("srchIndexesAllowed") or []) | set(
+        content.get("imported_srchIndexesAllowed") or []
+    )
+    disallowed = set(content.get("srchIndexesDisallowed") or []) | set(
+        content.get("imported_srchIndexesDisallowed") or []
+    )
+    return allowed, disallowed
+
+
+def _probe_index_access(client: httpx.Client, index_name: str) -> IndexAccessProbe:
+    """D015 (resuelto): determina de forma DETERMINISTA -- no heurística --
+    si el token actual tiene acceso efectivo de búsqueda a `index_name`,
+    consultando el modelo de autorización real de Splunk en vez de confiar
+    en que una búsqueda vacía significa "no hay datos".
+
+    Un usuario puede tener varios roles propios (no solo `imported_roles`
+    dentro de un rol) -- el acceso efectivo es la UNIÓN de lo que cada uno
+    de sus roles permite (comportamiento estándar y documentado de Splunk,
+    análogo a la herencia entre roles). Si CUALQUIER rol no se puede leer
+    con confianza, todo el resultado es UNDETERMINED -- fail-safe: nunca se
+    declara CONFIRMED con información parcial (ver item 2 del pedido:
+    "no implementes una heurística que pueda declarar falsamente que existe
+    acceso").
+
+    Regla de precedencia (confirmada empíricamente contra el laboratorio:
+    un rol con `srchIndexesAllowed=["*","_*"]` PERO
+    `srchIndexesDisallowed=["_audit"]` NO pudo buscar `_audit`): disallow
+    siempre gana sobre allow, sin importar cuán amplio sea el allow."""
+
+    roles = _current_user_roles(client)
+    if not roles:
+        return IndexAccessProbe.UNDETERMINED
+
+    allowed_all: set[str] = set()
+    disallowed_all: set[str] = set()
+    for role in roles:
+        patterns = _role_index_patterns(client, role)
+        if patterns is None:
+            return IndexAccessProbe.UNDETERMINED
+        allowed, disallowed = patterns
+        allowed_all |= allowed
+        disallowed_all |= disallowed
+
+    if any(_index_pattern_matches(p, index_name) for p in disallowed_all):
+        return IndexAccessProbe.DENIED
+    if any(_index_pattern_matches(p, index_name) for p in allowed_all):
+        return IndexAccessProbe.CONFIRMED
+    return IndexAccessProbe.DENIED
 
 
 @dataclass
@@ -190,15 +335,55 @@ def _collect_ingest(client: httpx.Client, queries_path: Path) -> pd.DataFrame:
     return _run_oneshot_search(client, _load_query(queries_path, "ingest_by_index_sourcetype.spl"))
 
 
+_AUDIT_INDEX = "_audit"
+
+
 def _collect_audit_searches(
     client: httpx.Client, queries_path: Path
-) -> tuple[pd.DataFrame | None, SignalAvailability]:
+) -> tuple[pd.DataFrame | None, SignalAvailability, str | None]:
+    """D015 (resuelto): un resultado VACÍO de esta query es ambiguo -- puede
+    ser "cero búsquedas reales" o "el token no tiene acceso efectivo a
+    `_audit` y Splunk aplicó el scope en silencio (HTTP 200, sin error)".
+    Confirmado empíricamente contra el laboratorio de Fase 3A/3B: un rol con
+    `srchIndexesAllowed` sin `_audit` produce exactamente esa respuesta.
+
+    Por eso solo se confía en un resultado vacío como "cero real" cuando la
+    query devuelve AL MENOS una fila (evidencia positiva inequívoca -- si
+    Splunk devolviera eventos reales de _audit, el acceso obviamente existe,
+    no hace falta ningún chequeo adicional), o cuando el resultado está
+    vacío PERO `_probe_index_access` confirma de forma determinista que el
+    token sí tiene acceso a `_audit`. En cualquier otro caso (acceso
+    denegado o no determinable) se degrada -- nunca se asume cero."""
+
     try:
         df = _run_oneshot_search(client, _load_query(queries_path, "audit_interactive_searches.spl"))
-        return df, SignalAvailability.AVAILABLE
     except _RECOVERABLE_REST_ERRORS + (SplunkQueryError, ValueError) as exc:
         logger.debug("audit_searches no disponible: %s", exc, exc_info=True)
-        return None, SignalAvailability.ERROR
+        return None, SignalAvailability.ERROR, None
+
+    if not df.empty:
+        return df, SignalAvailability.AVAILABLE, None
+
+    probe = _probe_index_access(client, _AUDIT_INDEX)
+    if probe is IndexAccessProbe.CONFIRMED:
+        return df, SignalAvailability.AVAILABLE, None
+    if probe is IndexAccessProbe.DENIED:
+        reason = (
+            "Search usage visibility is incomplete: current credentials do "
+            "not have confirmed access to _audit (index access restricted "
+            "by role). Usage-dependent classifications were downgraded for "
+            "safety instead of treating this as zero interactive searches."
+        )
+        logger.debug("audit_searches: acceso a _audit denegado para el token actual")
+        return None, SignalAvailability.UNAVAILABLE, reason
+    reason = (
+        "Search usage visibility is incomplete: could not reliably confirm "
+        "whether current credentials have access to _audit (fail-safe). "
+        "Usage-dependent classifications were downgraded for safety instead "
+        "of treating this as zero interactive searches."
+    )
+    logger.debug("audit_searches: no se pudo determinar el acceso a _audit para el token actual")
+    return None, SignalAvailability.UNAVAILABLE, reason
 
 
 def _collect_saved_searches(
@@ -296,9 +481,13 @@ def collect(config: RestConfig, queries_dir: str) -> RawCollection:
         collection.sources_available["ingest"] = SignalAvailability.AVAILABLE
 
         t0 = time.monotonic()
-        collection.audit_searches, collection.sources_available["audit_searches"] = (
-            _collect_audit_searches(client, queries_path)
-        )
+        (
+            collection.audit_searches,
+            collection.sources_available["audit_searches"],
+            audit_reason,
+        ) = _collect_audit_searches(client, queries_path)
+        if audit_reason:
+            collection.diagnostics["audit_searches"] = audit_reason
         logger.debug("audit_searches tomó %.2fs", time.monotonic() - t0)
 
         t0 = time.monotonic()
