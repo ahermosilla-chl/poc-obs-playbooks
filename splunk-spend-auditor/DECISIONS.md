@@ -5,6 +5,157 @@ una, para no volver a discutirlas desde cero en sesiones futuras.
 
 ---
 
+## D021 — Fase 4B: 5 vulnerabilidades confirmadas y corregidas (XSS, proxy silencioso, path traversal, envenenamiento numérico, crash por fecha malformada)
+
+**Contexto:** Fase 4B, revisión de seguridad y adversarial dedicada, previa
+a distribuir el producto a testers externos. Threat model, dependency
+audit (pip-audit), SAST (Bandit + reglas Semgrep locales), secret
+scanning (gitleaks, working tree + historial completo), y fuzzing
+adversarial manual contra cada capa del pipeline. Cada hallazgo se validó
+empíricamente (no se asumió nada) antes de clasificarlo o corregirlo.
+
+**1. XSS almacenado en report.html (CRITICAL).** `select_autoescape(["html"])`
+decide el autoescape mirando si el NOMBRE del template termina en
+`.html` -- pero nuestros archivos se llaman `report.html.j2`/
+`report.md.j2`, terminados en `.j2`. Confirmado con una prueba directa:
+`select_autoescape(["html"])("report.html.j2")` devuelve `False`. Un
+dataset con `index="<script>alert(1)</script>"` ejecutaba el script al
+abrir `report.html` en un browser -- explotable por cualquiera con
+capacidad de nombrar un index/sourcetype en el Splunk auditado. Corregido
+con un callable de autoescape explícito (`_autoescape_for_template`)
+keyed en el nombre real de archivo, no en la heurística de sufijo de
+`select_autoescape`. Bandit (B701) sigue marcando esta línea como
+advertencia estática -- es un falso positivo esperado sobre el código YA
+corregido (Bandit no puede ejecutar el callable para confirmar que
+devuelve `True` para `.html.j2`); la corrección está verificada
+empíricamente, no solo por inspección estática.
+
+**2. `trust_env=True` por defecto viola "local-first" (HIGH).** `httpx.Client()`
+sin `trust_env=False` lee `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` del
+entorno y enruta el tráfico -- incluido el header `Authorization` con el
+Bearer token -- a través de ese proxy sin avisar. Confirmado con el propio
+`_client()` de este proyecto: para un host no cubierto por `NO_PROXY`,
+httpx resolvía un transport respaldado por un `HTTPProxy` real en vez de
+una conexión directa. Especialmente probable en el entorno corporativo
+típico del público objetivo (Splunk Admin/Platform Engineer). Corregido
+con `trust_env=False` explícito. Tradeoff documentado: también deja de
+honrar `SSL_CERT_FILE`/`SSL_CERT_DIR` si algún entorno dependiera de esas
+variables para un CA bundle interno (poco común -- la mayoría de las CAs
+corporativas se instalan a nivel de SO, que el contexto SSL por defecto de
+Python ya lee independientemente de `trust_env`).
+
+**3. Path traversal en la URL de `/authorization/roles/<role>` (MEDIUM).**
+A diferencia de un nombre de índice (Splunk restringe a `[a-z0-9_-]` al
+crearlo -- verificado creando índices reales con nombres maliciosos contra
+el laboratorio, todos rechazados), un nombre de ROL no tiene esa
+restricción -- verificado creando un rol real llamado
+`../../authentication/users` contra el laboratorio, aceptado sin error.
+Interpolado crudo en la URL, esto permitía que httpx normalizara
+`.../roles/../../authentication/users` hacia un endpoint Splunk
+completamente distinto (confirmado con `httpx.Request(...).url`). El
+fallback existente de D015 ya caía del lado seguro (`UNDETERMINED`/
+`DENIED`, nunca `CONFIRMED` falso) en este caso específico gracias al
+chequeo defensivo de campos ya existente, y explotarlo de verdad requiere
+que un Splunk ADMIN ya malicioso asigne ese rol al usuario objetivo --
+alguien en esa posición ya podría causar daño mayor editando
+`srchIndexesAllowed` directamente. Aun así, corregido con
+`urllib.parse.quote(role, safe="")` -- cierra el vector en el origen en
+vez de depender de que el parseo defensivo downstream siga
+coincidiendo, sin cambiar el comportamiento para ningún nombre de rol
+legítimo.
+
+**4. `gb` no finito/negativo envenena silenciosamente todo el cálculo de
+ahorro (HIGH -- robustez/integridad de datos).** `NaN`/`Infinity` son
+literales que `json.loads` de Python acepta por defecto (no son JSON
+estándar, pero tampoco producen un error) -- una respuesta REST
+técnicamente malformada, o una única fila corrupta de `license_usage.log`,
+podía envenenar el promedio de un dataset y de ahí `compute_savings()`
+completo: confirmado que el reporte final llegaba a mostrar literalmente
+"nan KB/day". Un valor negativo también se colaba y podía clasificarse
+como `POSSIBLE_WASTE`, lo cual no tiene sentido semántico (un ingest no
+puede ser negativo). Corregido descartando filas con `gb` no numérico, no
+finito o negativo ANTES de agregar (`analysis/build_datasets.py`) --
+afecta tanto al modo REST como al modo CSV por igual, ya que ambos pasan
+por el mismo punto de agregación. Nota tranquilizadora encontrada durante
+la investigación: como `compute_savings()` calcula el ahorro en dólares
+como `annual_spend * potential_reduction_pct` (un porcentaje, nunca un
+$/GB fijo), un valor de ingest corrupto NUNCA podía producir un ahorro en
+dólares mayor al `--annual-spend` que el propio usuario ingresó -- el
+peor caso posible ya estaba acotado por diseño, aunque igual producía
+"nan"/porcentajes sin sentido, ahora corregido.
+
+**5. Fecha malformada crashea todo el audit (MEDIUM -- confirmado con
+fuzzing).** `pd.to_datetime()` sin `errors="coerce"` (4 puntos en
+`build_datasets.py`) levanta `DateParseError` sin manejar ante un solo
+valor de `date` no parseable -- confirmado con fuzzing adversarial
+directo contra el pipeline completo. Corregido con `errors="coerce"` en
+los 4 puntos; una fecha inválida se vuelve `NaT`, que las comparaciones de
+ventana (`>= window_30`/`window_90`) evalúan como `False` -- la fila
+simplemente no cuenta para esa ventana, en vez de abortar todo.
+
+**Hallazgos investigados y descartados como no explotables/no aplicables
+(documentados, no corregidos):** redirects de httpx (no aplicable --
+`follow_redirects=False` por defecto, verificado, nunca se siguen);
+excepciones de httpx exponiendo el header Authorization (no aplicable --
+verificado que `HTTPStatusError`/`Request.__repr__` nunca incluyen
+headers); logging `--verbose` exponiendo el token (no aplicable --
+verificado que `httpcore` solo loguea metadata de ciclo de vida
+`send_request_headers.started/.complete`, nunca el contenido real de los
+headers); `RestConfig` como dataclass sin `repr=False` en `token`
+(latente -- el repr por defecto SÍ incluiría el token en texto plano, pero
+`config` nunca se loguea/imprime en ningún punto actual del código,
+confirmado por grep; documentado como fragilidad a vigilar si se agrega
+logging nuevo, no corregido en esta iteración porque no hay explotación
+real hoy); símlinks en `--output-dir` (riesgo real pero de precondición
+alta -- requiere que un atacanque YA tenga escritura en el mismo
+directorio que usará la víctima; documentado, no corregido);
+permisos `644` en los archivos de reporte generados (comportamiento
+estándar de umask del SO, no algo que el código fije explícitamente;
+documentado como recomendación futura, no corregido para no cambiar
+comportamiento de archivos sin que se pida explícitamente).
+
+**Dependency audit (pip-audit):** sin vulnerabilidades conocidas en
+runtime ni en dev dependencies (auditado por separado, ambos limpios).
+
+**SAST:** Bandit (perfil completo) -- 1 hallazgo (B701, el mismo XSS de
+arriba, ya corregido, falso positivo residual esperado sobre el código
+fijo). Reglas Semgrep locales (sin acceso de red a semgrep.dev en este
+sandbox, así que se usó un ruleset propio dirigido a las categorías de
+riesgo de esta fase) -- 3 hallazgos, todos ya cubiertos (el mismo XSS +
+2 sobre escritura de archivo en `--output-dir`, evaluados como no
+aplicables porque `output_dir` es input del operador local, no de
+Splunk/remoto).
+
+**Secret scanning (gitleaks):** working tree y TODO el historial de git
+(12 commits) -- sin secretos encontrados en ninguno de los dos.
+
+**Local-first (verificado empíricamente con trazado de sockets, no solo
+inspección de código):** `quickscan`/`audit` en modo CSV -- cero
+conexiones de red, cero lookups DNS. `quickscan`/`audit` en modo REST --
+única conexión al host/puerto configurados, ninguna otra. `report.html`
+generado -- cero referencias a recursos externos (sin CDN, sin fuentes,
+sin analítica).
+
+**Supply chain / reproducibility:** `pyproject.toml` no fija versiones
+(`typer>=0.12`, etc.) -- confirmado que dos instalaciones en fechas
+distintas pueden traer versiones de dependencias distintas. No se generó
+ningún lock file/SBOM en esta iteración (el pedido explícito era
+"propón, sin publicar nada todavía" y "no implementes infraestructura
+compleja sin justificarla") -- la recomendación queda en
+PROJECT_STATUS.md, sección Fase 4B, como propuesta a decidir, no como
+código.
+
+**Tests:** 165 -> 175 (todos passing). Cada vulnerabilidad corregida
+(1, 2, 3, 4, 5 arriba) tiene al menos un test de regresión dedicado.
+
+**Validación contra el laboratorio real:** todas las correcciones
+verificadas end-to-end contra `splunk-lab` real (no solo mocks) -- el
+audit completo produce los mismos números que antes de esta fase (877
+KB/day, 64.6%, $60,848), confirmando que ninguna corrección cambió el
+comportamiento para datos legítimos.
+
+---
+
 ## D020 — Idioma de mensajes operacionales de la CLI: inglés, consistente con el resto del producto; precisión de "read-only" en docs/security.md
 
 **Contexto:** Fase 4A (evaluación de solo lectura de onboarding para

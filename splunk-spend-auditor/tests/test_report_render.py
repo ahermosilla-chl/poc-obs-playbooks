@@ -409,3 +409,66 @@ class TestNoProductTierLabelInReport:
         assert len(context["ingestion_breakdown"]) <= 5
         assert len(context["top_candidates"]) <= 3
         assert context["usage_analysis"] == []
+
+
+class TestHtmlReportEscapesUntrustedSplunkStrings:
+    """Fase 4B (vulnerabilidad CRITICAL, corregida): `select_autoescape(["html"])`
+    decide el autoescape mirando si el NOMBRE del template termina en
+    ".html" -- pero nuestros archivos se llaman "report.html.j2"/
+    "report.md.j2", que terminan en ".j2", no ".html". Jinja2 devolvía
+    autoescape=False para el reporte HTML sin ningún error ni warning, y
+    cualquier string controlado por Splunk (nombre de index/sourcetype,
+    texto de explicación) se insertaba sin escapar -- confirmado
+    explotable: un dataset con index=`<script>alert(1)</script>` ejecutaba
+    el script al abrir report.html en un browser. render.py ahora usa un
+    callable explícito (`_autoescape_for_template`) en vez de depender de
+    la heurística de sufijo de `select_autoescape`."""
+
+    _PAYLOAD_INDEX = "<script>alert('xss-index')</script>"
+    _PAYLOAD_SOURCETYPE = 'evil"><img src=x onerror=alert(1)>'
+
+    def _malicious_dataset(self) -> Dataset:
+        ds = Dataset(key=DatasetKey(index=self._PAYLOAD_INDEX, sourcetype=self._PAYLOAD_SOURCETYPE))
+        ds.ingest_gb_per_day = 10.0
+        ds.classification = Classification.POSSIBLE_WASTE
+        ds.explanation = "Explanation with <script>alert('xss-explanation')</script> and & < > \" ' chars."
+        ds.data_value_score = 0
+        return ds
+
+    def _render_with_malicious_dataset(self, tmp_path):
+        ds = self._malicious_dataset()
+        summary = EnvironmentSummary(total_datasets=1, sources_available={})
+        savings = compute_savings([ds])
+        context = build_report_context([ds], summary, savings, tier="pro")
+        return render_report(context, tmp_path, ["html", "md"])
+
+    def test_html_report_never_contains_a_raw_script_tag(self, tmp_path):
+        written = self._render_with_malicious_dataset(tmp_path)
+        html = written["html"].read_text()
+        assert "<script>alert" not in html
+        assert "&lt;script&gt;alert" in html
+
+    def test_html_report_never_contains_a_raw_event_handler_breakout(self, tmp_path):
+        written = self._render_with_malicious_dataset(tmp_path)
+        html = written["html"].read_text()
+        # El breakout de atributo (cerrar el <code> con "> e inyectar un tag
+        # nuevo) debe quedar neutralizado -- las comillas y los ángulos
+        # deben estar escapados, no aparecer crudos formando un tag real.
+        assert '"><img src=x onerror=alert(1)>' not in html
+        assert "&#34;&gt;&lt;img" in html
+
+    def test_html_report_escapes_ampersand_and_quotes_in_explanation_text(self, tmp_path):
+        written = self._render_with_malicious_dataset(tmp_path)
+        html = written["html"].read_text()
+        assert "&amp;" in html
+        assert "&lt;" in html and "&gt;" in html
+
+    def test_autoescape_is_keyed_on_actual_template_filenames(self):
+        """Guarda de regresión directa sobre la causa raíz: el callable de
+        autoescape debe reconocer "report.html.j2" (no ".html" a secas, que
+        es el patrón que select_autoescape() buscaba y nunca encontraba)."""
+        from splunk_spend_auditor.reports.render import _autoescape_for_template
+
+        assert _autoescape_for_template("report.html.j2") is True
+        assert _autoescape_for_template("report.md.j2") is False
+        assert _autoescape_for_template(None) is False

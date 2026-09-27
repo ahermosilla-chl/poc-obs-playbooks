@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 
 from splunk_spend_auditor.analysis.spl_parser import parse_search
@@ -26,15 +27,26 @@ def _max_confidence(
 
 
 def _infer_as_of_date(collection: RawCollection) -> datetime:
+    # Fase 4B: pd.to_datetime() sin errors="coerce" levanta DateParseError
+    # (crash sin manejar, hasta el usuario final) ante un solo valor de
+    # `date` malformado en una respuesta de Splunk -- confirmado con
+    # fuzzing adversarial. Con errors="coerce" un valor inválido se
+    # convierte en NaT en vez de abortar todo; `.max()` de pandas ignora
+    # NaT salvo que TODA la columna sea NaT, caso que se descarta abajo en
+    # vez de comparar NaT contra un datetime real.
     candidates: list[datetime] = []
     if collection.ingest is not None and "date" in collection.ingest.columns:
-        candidates.append(pd.to_datetime(collection.ingest["date"]).max())
+        ingest_max = pd.to_datetime(collection.ingest["date"], errors="coerce").max()
+        if pd.notna(ingest_max):
+            candidates.append(ingest_max)
     if (
         collection.audit_searches is not None
         and "date" in collection.audit_searches.columns
         and not collection.audit_searches.empty
     ):
-        candidates.append(pd.to_datetime(collection.audit_searches["date"]).max())
+        audit_max = pd.to_datetime(collection.audit_searches["date"], errors="coerce").max()
+        if pd.notna(audit_max):
+            candidates.append(audit_max)
     if not candidates:
         return datetime.utcnow()
     return max(candidates)
@@ -56,7 +68,23 @@ def build_datasets(
 
     # --- 1. Ingest (obligatorio) ---
     ingest_df = collection.ingest.copy()
-    ingest_df["date"] = pd.to_datetime(ingest_df["date"])
+    # errors="coerce" (Fase 4B): ver docstring de _infer_as_of_date -- un
+    # solo valor de fecha malformado no puede tirar abajo todo el audit.
+    ingest_df["date"] = pd.to_datetime(ingest_df["date"], errors="coerce")
+    # Fase 4B: `gb` viene de Splunk (o de un CSV exportado manualmente) sin
+    # ninguna garantía de forma -- confirmado que un valor NaN/Infinity
+    # (Python's json.loads acepta esos literales no-estándar por defecto,
+    # así que una respuesta REST malformada los deja pasar sin error) o
+    # negativo envenena silenciosamente el promedio de TODO el dataset
+    # (`nan` contamina cualquier suma/media que lo incluya) y de ahí el
+    # cálculo de ahorro completo -- el reporte terminaba mostrando
+    # literalmente "nan KB/day" en producción. Se descartan filas con `gb`
+    # no numérico, no finito o negativo ANTES de agregar -- un volumen de
+    # ingest no puede ser negativo ni infinito por definición, así que esto
+    # no excluye ningún dato legítimo, solo basura.
+    ingest_df["gb"] = pd.to_numeric(ingest_df["gb"], errors="coerce")
+    valid_gb = np.isfinite(ingest_df["gb"]) & (ingest_df["gb"] >= 0)
+    ingest_df = ingest_df[valid_gb]
     grouped = (
         ingest_df.groupby(["index", "sourcetype"])["gb"]
         .agg(["mean", "count"])
@@ -82,7 +110,11 @@ def build_datasets(
 
     if collection.audit_searches is not None and not collection.audit_searches.empty:
         audit_df = collection.audit_searches.copy()
-        audit_df["date"] = pd.to_datetime(audit_df["date"])
+        # errors="coerce" (Fase 4B): una fecha inválida se vuelve NaT, que
+        # las comparaciones >= window_30/window_90 de abajo evalúan como
+        # False -- la búsqueda simplemente no cuenta para ninguna ventana,
+        # en vez de tirar abajo todo el audit con un DateParseError.
+        audit_df["date"] = pd.to_datetime(audit_df["date"], errors="coerce")
         # Excluir scheduler tanto por columna is_scheduled como por prefijo
         # de search_id (defensivo: cualquiera de las dos señales basta).
         is_sched_col = audit_df.get("is_scheduled", False)

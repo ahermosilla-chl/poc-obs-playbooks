@@ -35,6 +35,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import pandas as pd
@@ -186,10 +187,26 @@ def _role_index_patterns(client: httpx.Client, role: str) -> tuple[set[str], set
     laboratorio con una cadena de 3 niveles de roles importados -- no hace
     falta que este código camine el grafo de roles a mano).
 
-    None si el rol no se pudo leer con confianza."""
+    None si el rol no se pudo leer con confianza.
+
+    Fase 4B: `role` viene de Splunk (`/authentication/current-context`),
+    pero a diferencia de un nombre de índice (que Splunk restringe a
+    `[a-z0-9_-]` al crearlo -- verificado contra el laboratorio real), un
+    nombre de ROL puede contener literalmente cualquier caracter, incluidos
+    `/` y `..` -- confirmado creando un rol real con ese nombre exacto
+    contra el laboratorio. Interpolado crudo en la URL, esto permitía que
+    httpx normalizara `.../roles/../../authentication/users` hacia un
+    endpoint completamente distinto (confirmado empíricamente). El fallo
+    resultante de D015 seguía cayendo del lado seguro (DENIED, nunca un
+    CONFIRMED falso) gracias al chequeo defensivo de campos ya existente,
+    pero `quote(..., safe="")` cierra el vector en el origen en vez de
+    depender de esa coincidencia -- ningún nombre de rol legítimo (sin
+    `/`) cambia de comportamiento."""
 
     try:
-        response = client.get(f"{_ROLES_ENDPOINT}/{role}", params={"output_mode": "json"})
+        response = client.get(
+            f"{_ROLES_ENDPOINT}/{quote(role, safe='')}", params={"output_mode": "json"}
+        )
         response.raise_for_status()
         payload = response.json()
     except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
@@ -262,12 +279,29 @@ class RestConfig:
 
 
 def _client(config: RestConfig) -> httpx.Client:
+    # Fase 4B: httpx.Client() por defecto trae trust_env=True, que hace DOS
+    # cosas que violan el principio "local-first, solo habla con el Splunk
+    # configurado" (docs/security.md, README.md): (1) lee HTTPS_PROXY/
+    # HTTP_PROXY/ALL_PROXY del entorno y enruta el tráfico -- incluido el
+    # header Authorization con el Bearer token -- a través de ese proxy sin
+    # avisar, algo especialmente probable en el entorno corporativo típico
+    # del público objetivo de este producto (Splunk Admin/Platform
+    # Engineer); (2) lee .netrc. Confirmado empíricamente con el propio
+    # _client() de este módulo: para un host no cubierto por NO_PROXY,
+    # httpx resuelve un transport respaldado por un HTTPProxy real en vez
+    # de una conexión directa. trust_env=False cierra ambas rutas --
+    # tradeoff documentado: también deja de honrar SSL_CERT_FILE/
+    # SSL_CERT_DIR si algún entorno dependiera de esas variables para un CA
+    # bundle interno (poco común -- la mayoría de las CAs corporativas se
+    # instalan a nivel de SO, que el contexto SSL por defecto de Python ya
+    # lee independientemente de trust_env). Ver DECISIONS.md D021.
     return httpx.Client(
         base_url=f"https://{config.host}:{config.port}",
         headers={"Authorization": f"Bearer {config.token}"},
         verify=config.verify_ssl,
         timeout=config.timeout_seconds,
         transport=config.transport,
+        trust_env=False,
     )
 
 

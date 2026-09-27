@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 
 from splunk_spend_auditor import __version__
 from splunk_spend_auditor.formatting import format_gb_per_day
@@ -53,10 +53,26 @@ _FIXED_RECOMMENDATIONS = [
 ]
 
 
+def _autoescape_for_template(name: str | None) -> bool:
+    """Fase 4B (vulnerabilidad CRITICAL encontrada y corregida): Jinja2's
+    `select_autoescape()` decides autoescaping by checking whether the
+    TEMPLATE NAME ends with one of the given extensions (e.g. ".html") --
+    but our template files are named "report.html.j2"/"report.md.j2", which
+    end in ".j2", not ".html". `select_autoescape(["html"])` therefore
+    silently returned autoescape=False for the HTML report, and any
+    Splunk-controlled string (index/sourcetype names, etc.) rendered into
+    report.html completely unescaped -- confirmed exploitable stored XSS
+    (a dataset named `<script>...</script>:sourcetype` executed verbatim in
+    the browser). This explicit check is keyed on our actual filenames
+    instead of relying on select_autoescape's convention-based guess."""
+
+    return bool(name) and name.endswith(".html.j2")
+
+
 def _env() -> Environment:
     return Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
-        autoescape=select_autoescape(["html"]),
+        autoescape=_autoescape_for_template,
         trim_blocks=True,
         lstrip_blocks=True,
     )

@@ -1,11 +1,11 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 4A.1 (External Tester Preparation)
+Última actualización: cierre de Fase 4B (Security & Adversarial Review)
 
 ## Estado actual
 
-**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C, 3C.1, 3C.2, 4A y
-4A.1 completadas.** El MVP técnico (Fase 2) está construido, probado y
+**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C, 3C.1, 3C.2, 4A, 4A.1
+y 4B completadas.** El MVP técnico (Fase 2) está construido, probado y
 validado end-to-end contra un escenario sintético. Fase 3A validó ese
 mismo diseño contra una instancia Splunk Enterprise real (10.4.3, vía
 Docker) y encontró y corrigió 3 bugs reales (D010/D011/D012). Fase 3B
@@ -28,8 +28,165 @@ Fase 4A.1 (D020) implementó esa preparación: mensajes operacionales de la
 CLI normalizados a inglés, README corregido y sin contradicciones
 internas, instalación mínima (`pip install -e .`, sin `[dev]`) verificada,
 y dos documentos nuevos entregables a un tester externo:
-`docs/splunk-permissions.md` y `docs/controlled-validation.md`. Ver
-sección "Fase 4A.1" abajo.
+`docs/splunk-permissions.md` y `docs/controlled-validation.md`. Fase 4B
+(D021) fue una revisión de seguridad y adversarial dedicada -- threat
+model, dependency audit, SAST, secret scanning, y fuzzing manual contra
+cada capa del pipeline -- que encontró y corrigió **5 vulnerabilidades
+confirmadas**: un XSS almacenado CRITICAL en `report.html` (el autoescape
+de Jinja2 nunca estaba activo, por un mismatch entre el nombre del
+template y la heurística de `select_autoescape`), una fuga HIGH del
+principio local-first (`httpx.Client()` respetaba `HTTPS_PROXY`/`.netrc`
+del entorno por defecto), un path traversal MEDIUM en la URL del
+preflight de D015, un envenenamiento numérico HIGH (`NaN`/`Infinity`/
+negativo en `gb` producía literalmente "nan KB/day" en el reporte), y un
+crash MEDIUM ante una fecha malformada. Ver sección "Fase 4B" abajo.
+
+## Fase 4B — Security & Adversarial Review (COMPLETADA)
+
+**Objetivo:** determinar si Log Spend Auditor tiene vulnerabilidades,
+comportamientos inseguros o riesgos de supply chain antes de distribuirlo
+a terceros -- sin agregar funcionalidad nueva, y sin declarar el producto
+"secure" solo por ser read-only.
+
+**Baseline confirmado antes de modificar:** 160 tests passing (exacto,
+como se esperaba desde el cierre de Fase 4A.1).
+
+**Threat model:** assets (Bearer token, metadata recolectada,
+report.html/md, filesystem local, la instancia Splunk); trust boundaries
+(CLI→Splunk, respuestas REST→parser, datos recolectados→renderer
+HTML/Markdown, variables de entorno→aplicación, dependencias→ejecución
+local). Cada boundary se probó adversarialmente, no solo se documentó en
+abstracto.
+
+**5 vulnerabilidades confirmadas y corregidas** (detalle completo,
+evidencia empírica y tradeoffs en `DECISIONS.md` D021):
+
+1. **XSS almacenado en report.html (CRITICAL).** `select_autoescape(["html"])`
+   nunca detectaba autoescape=True para `report.html.j2` (termina en
+   `.j2`, no en `.html`) -- confirmado con una prueba directa antes de
+   tocar nada. Un dataset con `index="<script>alert(1)</script>"`
+   ejecutaba el script al abrir el reporte. Corregido con un callable de
+   autoescape explícito.
+2. **`trust_env=True` viola local-first (HIGH).** `httpx.Client()` sin
+   `trust_env=False` enrutaba el tráfico -- incluido el Bearer token --
+   a través de `HTTPS_PROXY`/`.netrc` del entorno sin avisar, confirmado
+   con el propio `_client()` de este proyecto contra un host real.
+   Corregido con `trust_env=False` explícito.
+3. **Path traversal en `/authorization/roles/<role>` (MEDIUM).** Un
+   nombre de rol de Splunk (sin la restricción de caracteres que sí tienen
+   los índices, verificado creando ambos contra el laboratorio real)
+   interpolado crudo en la URL permitía que httpx normalizara la ruta
+   hacia un endpoint distinto. El fallback de D015 ya caía del lado
+   seguro en este caso, pero se corrigió en el origen con
+   `urllib.parse.quote`.
+4. **Envenenamiento numérico por `gb` no finito/negativo (HIGH).**
+   `NaN`/`Infinity` (que `json.loads` acepta sin error) o un valor
+   negativo en el campo `gb` envenenaba el promedio de un dataset y de ahí
+   `compute_savings()` completo -- el reporte llegó a mostrar literalmente
+   "nan KB/day". Corregido descartando filas inválidas antes de agregar
+   (afecta CSV y REST por igual, mismo punto de agregación compartido).
+5. **Crash por fecha malformada (MEDIUM).** `pd.to_datetime()` sin
+   `errors="coerce"` (4 puntos) crasheaba todo el audit ante un solo valor
+   de fecha no parseable -- confirmado con fuzzing adversarial. Corregido
+   en los 4 puntos.
+
+**Dependency audit (pip-audit):** runtime y dev dependencies auditados por
+separado -- **sin vulnerabilidades conocidas en ninguno de los dos**
+(auditoría real contra la base de datos de PyPI, confirmada con logging
+verboso, no una ejecución silenciosa fallida).
+
+**SAST:** Bandit (perfil completo, sin exclusiones) -- 1 hallazgo (B701,
+el mismo XSS del punto 1, ya corregido; falso positivo residual esperado
+porque Bandit no puede ejecutar el callable de autoescape para confirmar
+que funciona). Reglas Semgrep propias (sin acceso de red a semgrep.dev en
+este sandbox -- se documenta la limitación en vez de fingir cobertura
+completa) dirigidas a las categorías de riesgo de esta fase -- 3
+hallazgos, todos ya cubiertos por el punto 1 o evaluados como no
+aplicables (escritura en `--output-dir`, que es input del operador local,
+no de Splunk).
+
+**Secret scanning (gitleaks):** working tree y los 12 commits completos
+del historial de git -- **sin secretos encontrados**.
+
+**HTML/Markdown injection:** ver punto 1 arriba. Verificado también que
+Markdown (`.md`, no ejecutado como HTML por ningún visor de texto plano)
+mantiene el contenido crudo intencionalmente -- no es una inconsistencia,
+es la diferencia correcta entre un formato ejecutable y uno que no lo es.
+
+**SPL injection:** único punto de sustitución dinámica de SPL en todo el
+proyecto (`$index$` en el comando `map` de `metadata_last_seen.spl`) --
+verificado que Splunk mismo restringe los nombres de índice a
+`[a-z0-9_-]` al crearlos (confirmado creando índices reales con payloads
+de inyección contra el laboratorio, todos rechazados con
+"Invalid name..."), por lo que ese punto de sustitución no es explotable
+en la práctica. Ningún otro campo (sourcetype/host/usuario) se interpola
+en una query SPL posterior en ningún punto del código.
+
+**Credential/token review:** token nunca impreso/persistido (una sola
+referencia en todo el código, en el header Authorization); nunca en el
+reporte (solo host:puerto vía `_source_label`); `--verbose` no lo expone
+(verificado que `httpcore` solo loguea metadata de ciclo de vida, nunca
+headers reales, con una corrida real contra el laboratorio); excepciones
+de httpx no lo exponen (verificado, `Request.__repr__`/`HTTPStatusError`
+nunca incluyen headers); redirects no aplican (`follow_redirects=False`
+por defecto, verificado, nunca se siguen). Hallazgo latente documentado,
+no corregido: `RestConfig` como dataclass sin `repr=False` en `token` SÍ
+expondría el token en texto plano si alguna vez se logueara/imprimiera --
+no ocurre hoy (confirmado por grep), pero es una fragilidad a vigilar.
+
+**Network/local-first (verificado empíricamente con trazado de sockets a
+nivel de proceso, no solo inspección de código):** modo CSV -- cero
+conexiones de red, cero lookups DNS, en `quickscan` y `audit`. Modo REST
+-- única conexión al host/puerto configurados, en `quickscan` y `audit`.
+`report.html` generado -- cero referencias a recursos externos.
+
+**Filesystem:** sin path traversal posible desde datos de Splunk (los
+nombres de archivo del reporte son literales fijos, nunca derivados de
+datos). `--output-dir` es input del operador local, no remoto -- no es
+una superficie de ataque en este threat model. Hallazgos de baja
+severidad documentados, no corregidos (no cambian comportamiento sin
+pedido explícito): archivos de reporte con permisos `644` (default de
+umask del SO, no fijado por el código) y riesgo teórico de symlink
+pre-existente en `--output-dir` (requiere que un atacante ya tenga
+escritura en ese directorio antes de que la víctima corra el audit).
+
+**Malformed/fuzz testing:** JSON con array gigante (20k filas), campos
+faltantes, valores `null`, timestamps no parseables, unicode raro
+(incluido null bytes y un `<script>` embebido), strings extremadamente
+largas (500k caracteres) -- probados contra el pipeline completo
+(collect → build_datasets → classify_all → savings → render). Encontró
+los hallazgos 4 y 5 de arriba; todo lo demás ya se manejaba sin crashear.
+
+**Resource exhaustion:** 50.000 datasets sintéticos (build_datasets: <2s);
+5.000 datasets + 20.000 búsquedas (pipeline completo: ~1.5s); parser SPL
+contra strings de hasta 5 millones de caracteres y miles de cláusulas OR
+anidadas (<0.3s, sin backtracking catastrófico -- los patrones regex del
+parser son estructuralmente lineales, confirmado). Sin DoS local trivial
+encontrado a escala razonable-a-generosa.
+
+**Supply chain / reproducibility:** `pyproject.toml` no fija versiones
+(`typer>=0.12`, etc.) -- confirmado que dos instalaciones en fechas
+distintas pueden traer dependencias distintas. No se implementó ningún
+lock file/SBOM en esta iteración (pedido explícito: "propón, sin publicar
+nada todavía"). **Propuesta mínima** (no implementada): un
+`requirements-lock.txt` generado con `pip freeze` contra una instalación
+conocida-buena, regenerado y committeado deliberadamente en cada release
+consciente (no automatizado todavía) -- suficiente para poder reproducir
+exactamente qué versiones se probaron, sin la complejidad de hashes/SBOM
+formal, que no se justifica para el volumen de dependencias actual (13
+directas). Decisión pendiente del usuario, no tomada en esta fase.
+
+**Tests:** 175 passing (160 baseline + 15 nuevos, uno o más por cada
+vulnerabilidad corregida). Cero regresiones. Validado además contra el
+laboratorio Splunk real -- mismos números que antes de esta fase (877
+KB/day, 64.6%, $60,848), confirmando que ninguna corrección cambió el
+comportamiento para datos legítimos.
+
+**Explícitamente NO tocado:** ninguna funcionalidad de producto nueva;
+lock file/SBOM (propuesto, no implementado); hardening de permisos de
+archivo (documentado, no implementado); protección contra symlinks
+pre-existentes (documentado, no implementado); el fix del `RestConfig`
+repr (documentado como fragilidad latente, no explotada hoy).
 
 ## Fase 4A.1 — External Tester Preparation (COMPLETADA)
 
@@ -359,6 +516,18 @@ los 5 puntos); lógica de truncamiento free/pro; ninguna fase posterior.
    KB-MB/día, no GB/día de un cliente real).
 5. Nombre y precio siguen provisionales (fuera de alcance de Fase 3C,
    explícitamente).
+6. Sin lock file/SBOM -- `pyproject.toml` no fija versiones de
+   dependencias, dos instalaciones en fechas distintas pueden diferir
+   (Fase 4B, propuesta sin implementar, ver DECISIONS.md D021).
+7. `RestConfig.token` sin `repr=False` -- el repr por defecto del
+   dataclass expondría el token en texto plano si alguna vez se
+   loguea/imprime; no ocurre hoy (verificado), pero es una fragilidad
+   latente a vigilar en cambios futuros (Fase 4B).
+8. Archivos de reporte generados con permisos `644` (default de umask del
+   SO); riesgo teórico de symlink pre-existente en `--output-dir` (requiere
+   que un atacante ya tenga escritura ahí antes de la corrida) -- ambos
+   documentados en Fase 4B, no corregidos para no cambiar comportamiento
+   de archivos sin que se pida explícitamente.
 
 ## Fase 3B — MVP Reliability & Graceful Degradation (COMPLETADA)
 

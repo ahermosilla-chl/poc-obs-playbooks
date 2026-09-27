@@ -511,6 +511,96 @@ class TestLastSeenEndToEnd:
         assert collection.ingest is not None
 
 
+class TestClientNeverTrustsEnvironmentProxyOrNetrc:
+    """Fase 4B (vulnerabilidad HIGH, corregida -- D021): httpx.Client() por
+    defecto trae trust_env=True, que enruta silenciosamente el tráfico
+    (incluido el header Authorization con el Bearer token) a través de
+    HTTPS_PROXY/HTTP_PROXY/ALL_PROXY del entorno si están seteadas -- muy
+    probable en el entorno corporativo típico del público objetivo de este
+    producto. Esto contradice directamente el principio "local-first, solo
+    habla con el Splunk configurado" (docs/security.md, README.md).
+    Confirmado empíricamente antes del fix: para un host real (no cubierto
+    por NO_PROXY), httpx resolvía un transport respaldado por un
+    HTTPProxy real en vez de una conexión directa."""
+
+    def test_client_has_trust_env_disabled(self):
+        from splunk_spend_auditor.collector.rest_collector import RestConfig, _client
+
+        config = RestConfig(host="customer-splunk.example-corp.com", token="fake-token")
+        client = _client(config)
+        assert client.trust_env is False
+
+    def test_client_never_resolves_a_proxy_backed_transport_for_the_configured_host(
+        self, monkeypatch
+    ):
+        """Guarda de regresión de punta a punta: incluso con variables de
+        proxy realmente seteadas en el entorno, el transport resuelto para
+        el host de Splunk configurado debe seguir siendo una conexión
+        directa."""
+        from splunk_spend_auditor.collector.rest_collector import RestConfig, _client
+
+        monkeypatch.setenv("HTTPS_PROXY", "http://attacker-controlled-proxy.invalid:8080")
+        monkeypatch.setenv("HTTP_PROXY", "http://attacker-controlled-proxy.invalid:8080")
+
+        config = RestConfig(host="customer-splunk.example-corp.com", token="fake-token")
+        client = _client(config)
+        import httpx
+
+        transport = client._transport_for_url(
+            httpx.URL("https://customer-splunk.example-corp.com:8089/services/search/jobs")
+        )
+        pool = getattr(transport, "_pool", None)
+        assert pool is None or "Proxy" not in type(pool).__name__
+
+
+class TestRoleNameIsUrlEncodedInRolesEndpoint:
+    """Fase 4B: a diferencia de un nombre de índice (Splunk restringe a
+    `[a-z0-9_-]` al crearlo -- verificado contra el laboratorio real), un
+    nombre de ROL puede contener literalmente cualquier caracter, incluidos
+    `/` y `..` -- también verificado creando un rol real con ese nombre
+    exacto contra el laboratorio. Interpolar `role` crudo en la URL
+    permitía que httpx normalizara `.../roles/../../authentication/users`
+    hacia un endpoint Splunk completamente distinto (confirmado
+    empíricamente). El fallback existente de D015 ya caía del lado seguro
+    (UNDETERMINED/DENIED, nunca CONFIRMED) en ese caso, pero el fix cierra
+    el vector en el origen -- este test verifica la URL real enviada, no
+    solo el resultado final."""
+
+    def test_role_with_path_traversal_characters_never_changes_the_requested_endpoint(self):
+        requested_raw_paths: list[bytes] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            # url.path decodifica %2F de vuelta a "/" (path LÓGICO) -- lo
+            # que realmente importa para este test es raw_path, la forma
+            # codificada que se envía en la línea de request real.
+            requested_raw_paths.append(request.url.raw_path)
+            if request.url.path == "/services/authentication/current-context":
+                return _current_context_response(["../../authentication/users"])
+            # Cualquier otra ruta (incluida la del endpoint "objetivo" del
+            # traversal) debe ser inalcanzable -- si el bug existiera, la
+            # request real llegaría a "/services/authentication/users" en
+            # vez de a la ruta de roles codificada.
+            return httpx.Response(404, json={"messages": [{"type": "ERROR", "text": "not found"}]})
+
+        with httpx.Client(base_url="https://lab:8089", transport=httpx.MockTransport(handler)) as client:
+            result = _probe_index_access(client, "some_index")
+
+        assert result is IndexAccessProbe.UNDETERMINED
+        # La request de roles debe haber sido enviada con el nombre del rol
+        # URL-encoded en el wire (barras escapadas a %2F), nunca como
+        # segmentos de path reales que un cliente HTTP podría normalizar.
+        role_request_paths = [
+            p for p in requested_raw_paths
+            if not p.startswith(b"/services/authentication/current-context")
+        ]
+        assert role_request_paths, "se esperaba al menos un intento de leer el rol"
+        for raw_path in role_request_paths:
+            assert raw_path.startswith(
+                b"/services/authorization/roles/..%2F..%2Fauthentication%2Fusers"
+            )
+            assert not raw_path.startswith(b"/services/authentication/users")
+
+
 class TestIndexPatternMatching:
     """D015 (resuelto): la convención de Splunk de que un `"*"` bare no
     concede acceso a índices internos, confirmada empíricamente contra el
