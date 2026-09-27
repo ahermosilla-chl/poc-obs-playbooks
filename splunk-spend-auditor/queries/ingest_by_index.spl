@@ -4,6 +4,10 @@ Fuente: docs/splunk-data-sources.md, sección 1.
 Qué produce: totales de GB/día por index solamente (sin desglose de
 sourcetype) — útil para el Executive Summary y para el modo "quickscan"
 rápido cuando no se necesita el detalle completo.
+
+Precisión (Fase 3C): 6 decimales de GB, no 4 -- ver
+ingest_by_index_sourcetype.spl para el detalle de por qué (datasets de
+bajo volumen real quedaban en 0.0000 GB con menos precisión).
 ```
 
 index=_internal source=*license_usage.log type="Usage"
@@ -11,7 +15,7 @@ earliest=-90d@d latest=now
 | eval indexname=if(len(idx)=0 OR isnull(idx),"(UNKNOWN)",idx)
 | bin _time span=1d
 | stats sum(b) as bytes by _time, indexname
-| eval gb=round(bytes/1024/1024/1024, 4)
+| eval gb=round(bytes/1024/1024/1024, 6)
 | eval date=strftime(_time, "%Y-%m-%d")
 | table date, indexname, gb
 | rename indexname as index

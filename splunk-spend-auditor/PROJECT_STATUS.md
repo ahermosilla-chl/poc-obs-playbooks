@@ -1,21 +1,122 @@
 # PROJECT_STATUS.md
 
-Última actualización: D015 resuelto (iteración corta posterior a Fase 3B)
+Última actualización: cierre de Fase 3C (Real Reporting Validation)
 
 ## Estado actual
 
-**Fase 2 completada. Fase 3A completada. Fase 3B completada. D015 resuelto.**
-El MVP técnico (Fase 2) está construido, probado y validado end-to-end
-contra un escenario sintético. Fase 3A validó ese mismo diseño contra una
-instancia Splunk Enterprise real y encontró y corrigió 3 bugs reales
-(D010/D011/D012). Fase 3B endureció el pipeline completo contra pérdida de
-señales y errores REST reales, y encontró y corrigió un bug de seguridad
-crítico (D014). La revisión de Fase 3B quedó en `MODIFY` con D015 como único
-blocker; una iteración corta posterior resolvió D015 con un preflight
-determinista de autorización (ver sección "D015" abajo) y, en el proceso,
-encontró y corrigió un segundo problema relacionado (el ahorro potencial
-podía subir en un caso específico que D014 no cubría del todo). Fase 3C
-(reporte con datos reales) es el próximo paso y todavía no empezó.
+**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C completada.** El MVP
+técnico (Fase 2) está construido, probado y validado end-to-end contra un
+escenario sintético. Fase 3A validó ese mismo diseño contra una instancia
+Splunk Enterprise real y encontró y corrigió 3 bugs reales (D010/D011/D012).
+Fase 3B endureció el pipeline completo contra pérdida de señales y errores
+REST reales, y encontró y corrigió un bug de seguridad crítico (D014). D015
+(único blocker de Fase 3B) se resolvió con un preflight determinista de
+autorización. Fase 3C ejecutó el producto end-to-end contra Splunk real
+(quickscan + audit + HTML + Markdown), verificó los números contra la fuente
+y encontró y corrigió 3 bugs reales de precisión numérica (D016) más un
+problema de ruido en el reporte (D017) -- ver sección "Fase 3C" abajo.
+
+## Fase 3C — Real Reporting Validation (COMPLETADA)
+
+**Objetivo:** evaluar si el output real (no sintético) del producto es
+suficientemente correcto, comprensible, explicable, profesional y
+accionable para constituir un MVP mostrable a un Splunk Admin/Platform
+Engineer/FinOps/manager -- sin rediseñar el producto.
+
+**Baseline confirmado antes de modificar:** 112 tests passing (exacto, como
+se esperaba desde el cierre de D015).
+
+**Preparación del laboratorio (documentado, ver D016/D017 y abajo):** el
+`partial_or_unknown_ratio` del entorno había subido a ~53% por acumulación
+de búsquedas exploratorias propias de sesiones anteriores (Fase 3A/3B/D015),
+cruzando el umbral de D009 y convirtiendo `lsa_waste` (el ejemplo central de
+`POSSIBLE_WASTE`) en `UNKNOWN`. Se agregaron 45 búsquedas interactivas
+limpias adicionales sobre `index=_internal sourcetype=splunkd` (sin tocar
+ningún dataset `lsa_*` existente) para diluir ese ruido -- bajó a ~32%. Esto
+no es "hacer trampa" en el demo: el ruido era 100% artefacto de las propias
+sesiones de investigación de Claude Code (queries `curl` exploratorias), no
+señal real; diluirlo con más señal limpia real es honesto y deja las 7
+clasificaciones del laboratorio estables para la evaluación.
+
+**Ejecución real end-to-end:** `quickscan` y `audit` (HTML + Markdown)
+corridos contra `splunk-lab` en modo REST (`--host localhost --port 8089`)
+con el token admin (visibilidad completa, no el token restringido de D015).
+Outputs guardados como evidencia (no en el repo -- ver informe entregado al
+usuario al cierre de esta fase, sección D, para las rutas exactas del
+sistema de archivos de la sesión).
+
+**Bugs reales encontrados y corregidos (D016 -- precisión numérica):**
+Verificando los números contra la fuente (`license_usage.log` real), se
+encontraron **3 puntos independientes** de redondeo excesivo en la cadena
+`Splunk → collector → model → savings → report`, cada uno truncando datasets
+de bajo volumen real a "0.0 GB/day" (indistinguible de "no ingiere nada"):
+1. `queries/ingest_by_index_sourcetype.spl` (y las 3 queries de ingest
+   informativas): 4 decimales de GB en la propia query SPL.
+2. `analysis/build_datasets.py`: 4 decimales de GB en Python, reintroducía
+   el problema incluso con la query ya corregida.
+3. `scoring/savings.py`: 2 decimales de GB en los 4 campos de volumen de
+   `SavingsEstimate` -- afectaba el total del entorno, no solo un dataset.
+
+Corregido a 8 decimales en los tres puntos, más un formateador compartido
+nuevo (`formatting.format_gb_per_day()`) que auto-escala a KB/MB/GB en vez
+de mostrar siempre "X.X GB/day". Usado en CLI, reporte (HTML/MD) y en los
+textos de explicación de cada candidato (`scoring/rules.py`, que antes
+tenía el mismo problema de formato hardcodeado). Ver D016 para el detalle
+completo y la validación contra el laboratorio real (antes/después).
+
+**Bug real encontrado y corregido (D017 -- ruido en el reporte):** índices
+internos de Splunk (`_internal`, `_audit`) aparecían como filas de "dataset"
+en el reporte (residual de D010 + las propias búsquedas de dilución de esta
+fase), con 0 GB/día garantizado y nombres que un manager/FinOps no sabría
+interpretar. Se filtran ahora en la capa de reporte (`reports/render.py`),
+sin afectar clasificación ni ahorro (siempre aportaban 0). Ver D017.
+
+**Mejoras de estructura del reporte** (docs/report-design.md sección 4 del
+pedido de Fase 3C, sin rediseño general):
+- Nueva sección "Current Environment": fuente de datos (segura, sin token),
+  fecha del audit, ventana analizada, señales disponibles/degradadas.
+- Nueva sección "Protected / High Value": muestra qué datasets el motor
+  reconoce como legítimamente en uso o protegidos, no solo los candidatos
+  a desperdicio -- refuerza confianza en el resto del reporte.
+- Executive Summary ahora incluye conteo por categoría (candidatos,
+  review, high value, protected, unknown, normal), con pluralización
+  correcta.
+- Declaración explícita "read-only" agregada a Risk Considerations (el
+  pedido de Fase 3C la pedía explícitamente y no estaba, solo implícita en
+  docs/security.md).
+
+**CSV export:** confirmado que NO está implementado (solo `--from-csv`
+como modo de *entrada*/collector). `docs/report-design.md` ya lo documentaba
+como característica "Pro" aspiracional desde Fase 2, nunca construida. No se
+implementó en Fase 3C (feature nueva, no un bug) -- queda como pendiente
+real, no bloqueante.
+
+**Tests:** 124 passing (112 baseline + 12 nuevos: 5 de `TestFormatGbPerDay`,
+1 de `TestReportOmitsInternalSplunkIndexes`, 1 de
+`TestProtectedHighValueSection`, 3 de `TestCountsSummaryLine`,
+1 en `tests/test_build_datasets.py` nuevo, 1 en `test_savings.py`). Cero
+regresiones. CI sigue sin depender de Splunk/Docker/red real.
+
+**Validado contra Splunk real:** verificación numérica manual completa,
+trazando 2 datasets concretos (`lsa_high_value`, `lsa_waste`) desde bytes
+crudos de `license_usage.log` hasta el reporte final -- ver informe
+entregado al usuario, sección C, para la traza completa con números
+exactos en cada paso. Todos los números coinciden.
+
+## Pendientes reales (no triviales)
+
+1. CSV export (`--export csv` o similar) documentado en
+   `docs/report-design.md` como funcionalidad Pro desde Fase 2, nunca
+   implementado. Requiere decisión explícita de si se construye antes de
+   cualquier validación externa.
+2. El riesgo análogo a D015 para `saved_searches`/`list_settings` sigue sin
+   preflight equivalente (ver "Pendientes" heredados de D015 más abajo).
+3. `protected_overrides` sigue sin poder proveerse en modo REST.
+4. No validado contra Splunk Cloud ni a escala de producción real (solo
+   Enterprise vía Docker, con volúmenes de laboratorio en el rango de
+   KB-MB/día, no GB/día de un cliente real).
+5. Nombre y precio siguen provisionales (fuera de alcance de Fase 3C,
+   explícitamente).
 
 ## Fase 3B — MVP Reliability & Graceful Degradation (COMPLETADA)
 

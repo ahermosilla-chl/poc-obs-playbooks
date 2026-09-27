@@ -10,6 +10,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from splunk_spend_auditor import __version__
+from splunk_spend_auditor.formatting import format_gb_per_day
 from splunk_spend_auditor.models import Classification, Dataset, EnvironmentSummary, SignalAvailability
 from splunk_spend_auditor.scoring.classify_all import high_ingest_threshold_for
 from splunk_spend_auditor.scoring.rules import REVIEW_WEIGHT
@@ -32,6 +33,7 @@ _DEGRADED_SIGNAL_STATES = frozenset(
 )
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "templates"
+
 
 _RECOMMENDATION_TEXT = {
     Classification.POSSIBLE_WASTE: "Optimization candidate — review ingestion/filtering policy.",
@@ -67,9 +69,29 @@ def build_report_context(
     tier: str = "pro",
     redact_hosts: bool = False,
     redact_names: bool = False,
+    source_label: str | None = None,
 ) -> dict:
+    """source_label (Fase 3C, sección "Current Environment"): identificador
+    NO sensible del origen de los datos -- p.ej. "REST — splunk.corp:8089"
+    o "CSV import — ./export/". Nunca debe incluir el token (ver
+    docs/security.md); quien arma este string (cli.py) es responsable de
+    eso, este módulo solo lo muestra tal cual."""
+
     del redact_hosts  # reservado: el MVP no muestra host/source en el reporte
     # (ver docs/security.md) -- el flag se acepta para compatibilidad futura.
+
+    # Fase 3C ("HTML quality review"): índices internos de Splunk (_internal,
+    # _audit, _introspection, _telemetry, ...) nunca aparecen en
+    # license_usage.log (no están sujetos a licencia) -- si aparecen como
+    # "dataset" es solo porque alguna saved search/búsqueda los menciona
+    # explícitamente (D010: contenido de sistema residual que sobrevive el
+    # filtro por owner). Mostrarlos en el reporte del cliente es puro ruido
+    # confuso ("¿por qué me hablan de _audit?") con 0.0 GB/día garantizado
+    # -- nunca afectan clasificación ni ahorro, así que excluirlos aquí es
+    # puramente de presentación, no cambia ningún número. Se filtra en la
+    # capa de reporte, no en build_datasets/classify_all/compute_savings,
+    # para no tocar la lógica de análisis -- ver docs/architecture.md.
+    datasets = [d for d in datasets if not d.key.index.startswith("_")]
 
     high_ingest_threshold = high_ingest_threshold_for(datasets)
 
@@ -93,6 +115,7 @@ def build_report_context(
         {
             "name": _display_name(ds),
             "gb_per_day": round(ds.ingest_gb_per_day, 2),
+            "gb_per_day_display": format_gb_per_day(ds.ingest_gb_per_day),
             "pct_of_total": round(100 * ds.ingest_gb_per_day / total_gb, 1),
         }
         for ds in all_sorted[:top_n]
@@ -123,6 +146,7 @@ def build_report_context(
         {
             "name": _display_name(ds),
             "gb_per_day": round(ds.ingest_gb_per_day, 2),
+            "gb_per_day_display": format_gb_per_day(ds.ingest_gb_per_day),
             "searches_30d": ds.interactive_searches_30d,
             "searches_90d": ds.interactive_searches_90d,
             "is_scheduled": ds.is_scheduled,
@@ -154,33 +178,94 @@ def build_report_context(
         {
             "name": _display_name(ds),
             "gb_per_day": round(ds.ingest_gb_per_day, 2),
+            "gb_per_day_display": format_gb_per_day(ds.ingest_gb_per_day),
             "classification": ds.classification.value,
             "score": ds.data_value_score,
         }
         for ds in all_sorted
     ]
 
+    # Fase 3C ("Protected / High Value", item 4): no esconder lo que el
+    # motor decidió NO recomendar -- ver un resumen refuerza confianza en
+    # el resto del reporte. Se muestra un top acotado, no la lista completa
+    # (que ya está en "Indexes / Sourcetypes" para el tier Pro).
+    protected_datasets = [d for d in all_sorted if d.classification == Classification.PROTECTED]
+    high_value_datasets = [d for d in all_sorted if d.classification == Classification.HIGH_VALUE]
+    _RECOGNIZED_TOP_N = 10
+    recognized_datasets = [
+        {
+            "name": _display_name(ds),
+            "gb_per_day_display": format_gb_per_day(ds.ingest_gb_per_day),
+            "classification": ds.classification.value,
+            "reason": ds.explanation,
+        }
+        for ds in (protected_datasets + high_value_datasets)[:_RECOGNIZED_TOP_N]
+    ]
+
+    # Fase 3C (Executive Summary, item 4): conteo por categoría -- responde
+    # "cuántos candidatos / cuántos protegidos / cuántos sin evidencia" sin
+    # tener que contar filas de tablas más abajo.
+    classification_counts = {
+        c.value: sum(1 for d in all_sorted if d.classification == c) for c in Classification
+    }
+
+    def _plural(n: int, singular: str, plural: str) -> str:
+        return f"{n} {singular if n == 1 else plural}"
+
+    counts_summary_line = " · ".join(
+        [
+            _plural(len(all_sorted), "dataset analyzed", "datasets analyzed"),
+            _plural(classification_counts["POSSIBLE_WASTE"], "optimization candidate", "optimization candidates"),
+            _plural(classification_counts["REVIEW"], "review", "reviews"),
+            _plural(classification_counts["HIGH_VALUE"], "high value", "high value"),
+            _plural(classification_counts["PROTECTED"], "protected", "protected"),
+            _plural(classification_counts["UNKNOWN"], "unknown", "unknown"),
+            _plural(classification_counts["NORMAL"], "normal", "normal"),
+        ]
+    )
+
+    savings_dict = asdict(savings)
+    savings_display = {
+        "current_ingest_gb_day": format_gb_per_day(savings.current_ingest_gb_day),
+        "possible_waste_gb_day": format_gb_per_day(savings.possible_waste_gb_day),
+        "review_gb_day": format_gb_per_day(savings.review_gb_day),
+        "candidate_gb_day": format_gb_per_day(savings.candidate_gb_day),
+    }
+
     context = {
         "tool_version": __version__,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "tier": tier,
         "lookback_days": summary.lookback_days,
-        "total_datasets": summary.total_datasets,
+        # len(datasets), no summary.total_datasets: este último se calculó
+        # antes del filtro de índices internos de arriba y quedaría
+        # inconsistente con el resto de las tablas del reporte.
+        "total_datasets": len(datasets),
+        "counts_summary_line": counts_summary_line,
         "current_ingest_gb_day": round(total_gb_actual, 2),
+        "current_ingest_display": format_gb_per_day(total_gb_actual),
         "ingestion_breakdown": ingestion_breakdown,
         "ingestion_breakdown_truncated": len(all_sorted) > top_n,
         "usage_analysis": usage_analysis if tier != "free" else [],
         "top_candidates": top_candidates,
         "candidates_truncated": len(candidates_all) > candidate_top_n,
         "all_datasets_detail": all_datasets_detail if tier != "free" else [],
-        "savings": asdict(savings),
+        "recognized_datasets": recognized_datasets,
+        "protected_count": len(protected_datasets),
+        "high_value_count": len(high_value_datasets),
+        "recognized_truncated": len(protected_datasets) + len(high_value_datasets) > _RECOGNIZED_TOP_N,
+        "classification_counts": classification_counts,
+        "savings": savings_dict,
+        "savings_display": savings_display,
         "review_weight": REVIEW_WEIGHT,
         "high_ingest_threshold_gb": round(high_ingest_threshold, 2),
+        "high_ingest_threshold_display": format_gb_per_day(high_ingest_threshold),
         "partial_or_unknown_ratio": summary.partial_or_unknown_ratio,
         "sources_available": summary.sources_available,
         "sources_available_display": sources_available_display,
         "reduced_confidence": bool(degraded_signal_names),
         "degraded_signal_names": degraded_signal_names,
+        "source_label": source_label,
         # Nota de squashing (docs/splunk-data-sources.md): en el MVP no se
         # analiza host/source, así que esta nota siempre se muestra como
         # recordatorio metodológico, no como señal detectada dinámicamente.

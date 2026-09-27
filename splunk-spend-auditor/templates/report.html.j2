@@ -46,9 +46,9 @@
 
 <h2>Executive Summary</h2>
 <div class="summary-box">
-  <p>Your Splunk environment ingests <strong>{{ current_ingest_gb_day }} GB/day</strong>
+  <p>Your Splunk environment ingests <strong>{{ current_ingest_display }}/day</strong>
      across {{ total_datasets }} (index, sourcetype) datasets.</p>
-  <p>Of that, <strong>{{ savings.candidate_gb_day }} GB/day</strong>
+  <p>Of that, <strong>{{ savings_display.candidate_gb_day }}/day</strong>
      ({{ (savings.potential_reduction_pct * 100) | round(1) }}%) are flagged as
      optimization candidates with low or no observed usage.</p>
   {% if savings.potential_annual_saving is not none %}
@@ -62,11 +62,23 @@
      ${{ "{:,.0f}".format(savings.potential_annual_saving) }}</strong>.</p>
   {% endif %}
   <p><em>This is a potential saving, not a guaranteed one — see "Risk Considerations" below.</em></p>
+  <p class="candidate-meta">{{ counts_summary_line }}</p>
 </div>
+
+<h2>Current Environment</h2>
+<table>
+  {% if source_label %}<tr><th>Data source</th><td>{{ source_label }}</td></tr>{% endif %}
+  <tr><th>Audit generated</th><td>{{ generated_at }}</td></tr>
+  <tr><th>Lookback window</th><td>{{ lookback_days }} days</td></tr>
+  <tr><th>Signals available</th><td>{{ sources_available_display | rejectattr("degraded") | list | length }} of {{ sources_available_display | length }}</td></tr>
+  {% if reduced_confidence %}
+  <tr><th>Signals degraded</th><td>{{ degraded_signal_names | join(", ") }} — see Methodology</td></tr>
+  {% endif %}
+</table>
 
 <h2>Current Spend</h2>
 <table>
-  <tr><th>Current ingest</th><td>{{ current_ingest_gb_day }} GB/day</td></tr>
+  <tr><th>Current ingest</th><td>{{ current_ingest_display }}/day</td></tr>
   {% if savings.annual_spend_input is not none %}
   <tr><th>Estimated annual spend (input)</th><td>${{ "{:,.0f}".format(savings.annual_spend_input) }}</td></tr>
   {% elif savings.cost_per_gb_day_input is not none %}
@@ -74,14 +86,14 @@
   {% else %}
   <tr><th>Spend estimate</th><td>Not provided — showing volume/percentage only</td></tr>
   {% endif %}
-  <tr><th>High-ingest threshold (this environment, p75)</th><td>{{ high_ingest_threshold_gb }} GB/day</td></tr>
+  <tr><th>High-ingest threshold (this environment, p75)</th><td>{{ high_ingest_threshold_display }}/day</td></tr>
 </table>
 
 <h2>Ingestion Breakdown</h2>
 <table>
-  <tr><th>Dataset</th><th>GB/day</th><th>% of total</th></tr>
+  <tr><th>Dataset</th><th>Volume/day</th><th>% of total</th></tr>
   {% for row in ingestion_breakdown %}
-  <tr><td><code>{{ row.name }}</code></td><td>{{ row.gb_per_day }}</td><td>{{ row.pct_of_total }}%</td></tr>
+  <tr><td><code>{{ row.name }}</code></td><td>{{ row.gb_per_day_display }}</td><td>{{ row.pct_of_total }}%</td></tr>
   {% endfor %}
 </table>
 {% if ingestion_breakdown_truncated %}
@@ -115,7 +127,7 @@
   <div class="candidate-card">
     <h3><code>{{ c.name }}</code> <span class="badge badge-{{ c.classification }}">{{ c.classification }}</span></h3>
     <p class="candidate-meta">
-      Ingest: {{ c.gb_per_day }} GB/day ·
+      Ingest: {{ c.gb_per_day_display }}/day ·
       Searches 30d: {{ c.searches_30d }} ·
       Searches 90d: {{ c.searches_90d }} ·
       Scheduled: {{ "Yes" if c.is_scheduled else "No" }} ·
@@ -135,14 +147,39 @@
   <p>No optimization candidates were found with the current thresholds.</p>
 {% endif %}
 
+<h2>Protected / High Value</h2>
+{% if recognized_datasets %}
+<p>Not every dataset is a candidate for review — the engine also recognizes
+   data it should <strong>never</strong> touch and data it found real evidence
+   of active use for. Showing {{ recognized_datasets | length }} of
+   {{ protected_count + high_value_count }} ({{ protected_count }} protected,
+   {{ high_value_count }} high value).</p>
+<table>
+  <tr><th>Dataset</th><th>Volume/day</th><th>Classification</th><th>Why</th></tr>
+  {% for row in recognized_datasets %}
+  <tr>
+    <td><code>{{ row.name }}</code></td>
+    <td>{{ row.gb_per_day_display }}</td>
+    <td><span class="badge badge-{{ row.classification }}">{{ row.classification }}</span></td>
+    <td>{{ row.reason }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% if recognized_truncated %}
+<p class="footer-note">Showing {{ recognized_datasets | length }} of {{ protected_count + high_value_count }} — see full detail below.</p>
+{% endif %}
+{% else %}
+<p>No datasets were classified as protected or high value in this run.</p>
+{% endif %}
+
 {% if all_datasets_detail %}
 <h2>Indexes / Sourcetypes (full detail)</h2>
 <table>
-  <tr><th>Dataset</th><th>GB/day</th><th>Classification</th><th>Data Value Score</th></tr>
+  <tr><th>Dataset</th><th>Volume/day</th><th>Classification</th><th>Data Value Score</th></tr>
   {% for row in all_datasets_detail %}
   <tr>
     <td><code>{{ row.name }}</code></td>
-    <td>{{ row.gb_per_day }}</td>
+    <td>{{ row.gb_per_day_display }}</td>
     <td><span class="badge badge-{{ row.classification }}">{{ row.classification }}</span></td>
     <td>{{ row.score }}</td>
   </tr>
@@ -152,18 +189,23 @@
 
 <h2>Potential Savings</h2>
 <table>
-  <tr><th>Current ingest</th><td>{{ savings.current_ingest_gb_day }} GB/day</td></tr>
-  <tr><th>Possible waste</th><td>{{ savings.possible_waste_gb_day }} GB/day</td></tr>
-  <tr><th>Review candidates (weighted ×{{ review_weight }})</th><td>{{ savings.review_gb_day }} GB/day</td></tr>
-  <tr><th>Total optimization candidate volume</th><td>{{ savings.candidate_gb_day }} GB/day</td></tr>
+  <tr><th>Current ingest</th><td>{{ savings_display.current_ingest_gb_day }}/day</td></tr>
+  <tr><th>Possible waste</th><td>{{ savings_display.possible_waste_gb_day }}/day</td></tr>
+  <tr><th>Review candidates (weighted ×{{ review_weight }})</th><td>{{ savings_display.review_gb_day }}/day</td></tr>
+  <tr><th>Total optimization candidate volume</th><td>{{ savings_display.candidate_gb_day }}/day</td></tr>
   <tr><th>Potential reduction</th><td>{{ (savings.potential_reduction_pct * 100) | round(1) }}%</td></tr>
   {% if savings.potential_annual_saving is not none %}
   <tr><th>Potential annual saving</th><td>${{ "{:,.0f}".format(savings.potential_annual_saving) }}</td></tr>
   {% endif %}
 </table>
+<p class="footer-note">This is a potential saving estimate, not a promise of
+   savings — see the assumptions in "Methodology" below.</p>
 
 <h2>Risk Considerations</h2>
 <div class="risk-box">
+  <p>This tool is <strong>read-only</strong>: it never modifies, deletes, or
+     disables anything in Splunk. It only reads metadata (ingest volume and
+     usage signals) — see docs/security.md.</p>
   <p>These figures are estimates based on Splunk metadata (ingest volume and
      search/alert/dashboard activity), <strong>not a financial audit</strong>.</p>
   <p>Datasets classified as <span class="badge badge-PROTECTED">PROTECTED</span>

@@ -71,12 +71,19 @@ def compute_savings(
     elif cost_per_gb_day is not None:
         potential_annual_saving = candidate_gb_day * cost_per_gb_day * 365
 
+    # Fase 3C: 8 decimales de GB, no 2 -- con 2 decimales, cualquier suma
+    # por debajo de ~5 MB/día (p.ej. un solo dataset de bajo volumen, o un
+    # entorno pequeño) redondeaba a 0.00, mostrando "0 GB/day" en el CLI y
+    # el reporte aunque hubiera volumen real. Confirmado empíricamente
+    # contra el laboratorio real -- ver también
+    # queries/ingest_by_index_sourcetype.spl y analysis/build_datasets.py,
+    # mismo bug en dos puntos más de la cadena.
     return SavingsEstimate(
-        current_ingest_gb_day=round(current_ingest_gb_day, 2),
-        candidate_gb_day=round(candidate_gb_day, 2),
+        current_ingest_gb_day=round(current_ingest_gb_day, 8),
+        candidate_gb_day=round(candidate_gb_day, 8),
         potential_reduction_pct=round(potential_reduction_pct, 4),
-        possible_waste_gb_day=round(possible_waste_gb_day, 2),
-        review_gb_day=round(review_gb_day, 2),
+        possible_waste_gb_day=round(possible_waste_gb_day, 8),
+        review_gb_day=round(review_gb_day, 8),
         annual_spend_input=annual_spend,
         cost_per_gb_day_input=cost_per_gb_day,
         potential_annual_saving=(

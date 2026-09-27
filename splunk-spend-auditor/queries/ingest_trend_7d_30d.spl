@@ -14,8 +14,8 @@ earliest=-30d@d latest=now
 | eval sourcetypename=if(len(st)=0 OR isnull(st),"(UNKNOWN)",st)
 | eval bucket=if(_time >= relative_time(now(), "-7d@d"), "last_7d", "prior_23d")
 | stats sum(b) as bytes by indexname, sourcetypename, bucket
-| eval gb=round(bytes/1024/1024/1024, 4)
+| eval gb=round(bytes/1024/1024/1024, 6)
 | eval days=if(bucket="last_7d", 7, 23)
-| eval gb_per_day=round(gb/days, 4)
+| eval gb_per_day=round(gb/days, 6)
 | stats list(bucket) as buckets list(gb_per_day) as gb_per_day_list by indexname, sourcetypename
 | rename indexname as index, sourcetypename as sourcetype

@@ -135,3 +135,21 @@ def test_losing_visibility_never_increases_potential_savings():
     # debe ser estrictamente menor (REVIEW pesa 0.5 contra 1.0 de
     # POSSIBLE_WASTE, ver REVIEW_WEIGHT en scoring/rules.py).
     assert savings_degraded.candidate_gb_day < savings_full.candidate_gb_day
+
+
+def test_low_volume_datasets_are_not_rounded_away_to_zero():
+    """Bug real (Fase 3C): compute_savings redondeaba los totales de GB/día
+    a 2 decimales -- un entorno de bajo volumen real (p.ej. varios
+    datasets por debajo de 1 MB/día, confirmado contra el laboratorio
+    Splunk real) terminaba mostrando "0 GB/day" en el CLI y el reporte
+    aunque hubiera volumen real y candidatos reales. Con 8 decimales, la
+    resolución mínima es sub-KB, suficiente para no perder esta señal."""
+
+    datasets = [
+        _ds(0.0004, Classification.POSSIBLE_WASTE),  # ~420 KB/día
+        _ds(0.0001, Classification.NORMAL),  # ~100 KB/día
+    ]
+    result = compute_savings(datasets, annual_spend=94_200)
+    assert result.current_ingest_gb_day > 0
+    assert result.candidate_gb_day > 0
+    assert result.potential_annual_saving > 0

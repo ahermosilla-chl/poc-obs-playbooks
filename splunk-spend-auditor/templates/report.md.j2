@@ -4,10 +4,10 @@ _Generated {{ generated_at }} — Log Spend Auditor v{{ tool_version }} ({{ tier
 
 ## Executive Summary
 
-Your Splunk environment ingests **{{ current_ingest_gb_day }} GB/day** across
+Your Splunk environment ingests **{{ current_ingest_display }}/day** across
 {{ total_datasets }} (index, sourcetype) datasets.
 
-Of that, **{{ savings.candidate_gb_day }} GB/day**
+Of that, **{{ savings_display.candidate_gb_day }}/day**
 ({{ (savings.potential_reduction_pct * 100) | round(1) }}%) are flagged as
 optimization candidates with low or no observed usage.
 
@@ -17,11 +17,24 @@ Based on {% if savings.annual_spend_input is not none %}an estimated annual spen
 
 _This is a potential saving, not a guaranteed one — see "Risk Considerations"._
 
+{{ counts_summary_line }}
+
+## Current Environment
+
+| | |
+|---|---|
+{% if source_label %}| Data source | {{ source_label }} |
+{% endif %}| Audit generated | {{ generated_at }} |
+| Lookback window | {{ lookback_days }} days |
+| Signals available | {{ sources_available_display | rejectattr("degraded") | list | length }} of {{ sources_available_display | length }} |
+{% if reduced_confidence %}| Signals degraded | {{ degraded_signal_names | join(", ") }} — see Methodology |
+{% endif %}
+
 ## Current Spend
 
 | Metric | Value |
 |---|---|
-| Current ingest | {{ current_ingest_gb_day }} GB/day |
+| Current ingest | {{ current_ingest_display }}/day |
 {% if savings.annual_spend_input is not none %}
 | Estimated annual spend (input) | ${{ "{:,.0f}".format(savings.annual_spend_input) }} |
 {% elif savings.cost_per_gb_day_input is not none %}
@@ -29,14 +42,14 @@ _This is a potential saving, not a guaranteed one — see "Risk Considerations".
 {% else %}
 | Spend estimate | Not provided — showing volume/percentage only |
 {% endif %}
-| High-ingest threshold (this environment, p75) | {{ high_ingest_threshold_gb }} GB/day |
+| High-ingest threshold (this environment, p75) | {{ high_ingest_threshold_display }}/day |
 
 ## Ingestion Breakdown
 
-| Dataset | GB/day | % of total |
+| Dataset | Volume/day | % of total |
 |---|---|---|
 {% for row in ingestion_breakdown %}
-| `{{ row.name }}` | {{ row.gb_per_day }} | {{ row.pct_of_total }}% |
+| `{{ row.name }}` | {{ row.gb_per_day_display }} | {{ row.pct_of_total }}% |
 {% endfor %}
 
 {% if ingestion_breakdown_truncated %}
@@ -59,7 +72,7 @@ _Showing top {{ ingestion_breakdown | length }} of {{ total_datasets }} datasets
 {% for c in top_candidates %}
 ### `{{ c.name }}` — {{ c.classification }}
 
-Ingest: {{ c.gb_per_day }} GB/day · Searches 30d: {{ c.searches_30d }} · Searches 90d: {{ c.searches_90d }} · Scheduled: {{ "Yes" if c.is_scheduled else "No" }} · Alerts: {{ "Yes" if c.has_alert else "No" }} · Dashboards: {{ "Yes" if c.used_in_dashboards else "No" }}{% if c.last_seen_days_ago is not none %} · Last observed: {{ c.last_seen_days_ago }} days ago{% endif %}
+Ingest: {{ c.gb_per_day_display }}/day · Searches 30d: {{ c.searches_30d }} · Searches 90d: {{ c.searches_90d }} · Scheduled: {{ "Yes" if c.is_scheduled else "No" }} · Alerts: {{ "Yes" if c.has_alert else "No" }} · Dashboards: {{ "Yes" if c.used_in_dashboards else "No" }}{% if c.last_seen_days_ago is not none %} · Last observed: {{ c.last_seen_days_ago }} days ago{% endif %}
 
 {{ c.explanation }}
 
@@ -73,13 +86,33 @@ _Showing top {{ top_candidates | length }} candidates.{% if tier == "free" %} Up
 No optimization candidates were found with the current thresholds.
 {% endif %}
 
+## Protected / High Value
+
+{% if recognized_datasets %}
+Not every dataset is a candidate for review — the engine also recognizes data
+it should **never** touch and data it found real evidence of active use for.
+Showing {{ recognized_datasets | length }} of {{ protected_count + high_value_count }}
+({{ protected_count }} protected, {{ high_value_count }} high value).
+
+| Dataset | Volume/day | Classification | Why |
+|---|---|---|---|
+{% for row in recognized_datasets %}
+| `{{ row.name }}` | {{ row.gb_per_day_display }} | {{ row.classification }} | {{ row.reason }} |
+{% endfor %}
+{% if recognized_truncated %}
+_Showing {{ recognized_datasets | length }} of {{ protected_count + high_value_count }} — see full detail below._
+{% endif %}
+{% else %}
+No datasets were classified as protected or high value in this run.
+{% endif %}
+
 {% if all_datasets_detail %}
 ## Indexes / Sourcetypes (full detail)
 
-| Dataset | GB/day | Classification | Data Value Score |
+| Dataset | Volume/day | Classification | Data Value Score |
 |---|---|---|---|
 {% for row in all_datasets_detail %}
-| `{{ row.name }}` | {{ row.gb_per_day }} | {{ row.classification }} | {{ row.score }} |
+| `{{ row.name }}` | {{ row.gb_per_day_display }} | {{ row.classification }} | {{ row.score }} |
 {% endfor %}
 {% endif %}
 
@@ -87,16 +120,23 @@ No optimization candidates were found with the current thresholds.
 
 | Metric | Value |
 |---|---|
-| Current ingest | {{ savings.current_ingest_gb_day }} GB/day |
-| Possible waste | {{ savings.possible_waste_gb_day }} GB/day |
-| Review candidates (weighted ×{{ review_weight }}) | {{ savings.review_gb_day }} GB/day |
-| Total optimization candidate volume | {{ savings.candidate_gb_day }} GB/day |
+| Current ingest | {{ savings_display.current_ingest_gb_day }}/day |
+| Possible waste | {{ savings_display.possible_waste_gb_day }}/day |
+| Review candidates (weighted ×{{ review_weight }}) | {{ savings_display.review_gb_day }}/day |
+| Total optimization candidate volume | {{ savings_display.candidate_gb_day }}/day |
 | Potential reduction | {{ (savings.potential_reduction_pct * 100) | round(1) }}% |
 {% if savings.potential_annual_saving is not none %}
 | Potential annual saving | ${{ "{:,.0f}".format(savings.potential_annual_saving) }} |
 {% endif %}
 
+_This is a potential saving estimate, not a promise of savings — see the
+assumptions in "Methodology" below._
+
 ## Risk Considerations
+
+This tool is **read-only**: it never modifies, deletes, or disables
+anything in Splunk. It only reads metadata (ingest volume and usage
+signals) — see docs/security.md.
 
 These figures are estimates based on Splunk metadata (ingest volume and
 search/alert/dashboard activity), **not a financial audit**.

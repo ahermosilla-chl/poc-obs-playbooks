@@ -5,6 +5,85 @@ una, para no volver a discutirlas desde cero en sesiones futuras.
 
 ---
 
+## D016 — Precisión de volumen (GB/día) elevada a 8 decimales; formateo auto-escalado
+
+**Contexto:** Fase 3C ("Verificar los números"). Al correr el audit real
+contra el laboratorio Splunk, varios datasets de bajo volumen real
+(p.ej. `lsa_alert_only`, 920 bytes/día) se mostraban como `0.0 GB/day` en
+el CLI, el reporte y el propio texto de explicación de cada candidato --
+indistinguible de "no ingiere nada". Investigado y encontrado en **tres
+puntos distintos** de la cadena, cada uno redondeando independientemente:
+1. `queries/ingest_by_index_sourcetype.spl` (y las 3 queries de ingest
+   informativas): `round(bytes/1024/1024/1024, 4)` -- 4 decimales de GB
+   (~100 KB de resolución) truncaba a 0 cualquier dataset por debajo de
+   ese umbral.
+2. `analysis/build_datasets.py`: `round(float(row["mean"]), 4)` -- mismo
+   problema, en Python, incluso después de corregir la query.
+3. `scoring/savings.py`: los 4 campos de volumen de `SavingsEstimate`
+   también se redondeaban a 2 decimales de GB (~5 MB de resolución) --
+   afectaba especialmente entornos pequeños completos, no solo un dataset
+   individual (`current_ingest_gb_day` de un laboratorio de prueba
+   mostraba "0 GB/day" con datos reales presentes).
+
+**Decisión:** los tres puntos ahora usan 8 decimales de GB (~10 bytes de
+resolución) en vez de 2-4. Además, se agregó `formatting.format_gb_per_day()`
+(módulo nuevo, fuera de `reports/` para que `scoring/rules.py` -- los
+textos de explicación de cada candidato -- pueda usarlo sin que `scoring`
+dependa de `reports`) que auto-escala el valor a KB/MB/GB según
+corresponda, en vez de mostrar siempre "X.X GB/day" con un número que
+puede leer como cero. Se usa en el CLI, el reporte (HTML/MD) y los textos
+de explicación de `scoring/rules.py` -- un solo punto de formateo,
+consistente en toda la herramienta.
+
+**Razón:** este no es un problema exclusivo del laboratorio de prueba --
+cualquier dataset real de bajo volumen (p.ej. un heartbeat/healthcheck
+poco frecuente, exactamente el tipo de dataset de bajo volumen que este
+producto también audita, ver docs/scoring.md) puede caer en el mismo
+rango. Mostrar "0.0 GB/day" para un dataset con volumen real y corriente
+(y potencialmente un candidato a revisión real) es engañoso y socava la
+credibilidad del reporte frente a un Splunk Admin/FinOps que sepa leer
+`license_usage.log` directamente.
+
+**Validación:** confirmado contra el laboratorio real -- antes del fix,
+`lsa_alert_only`/`lsa_protected`/`lsa_review` mostraban "0 GB/day" pese a
+tener bytes reales confirmados vía `license_usage.log`; después, muestran
+"1 KB/day"/"4 KB/day"/"3 KB/day" respectivamente. Tests de regresión:
+`tests/test_build_datasets.py`, `tests/test_savings.py::test_low_volume_datasets_are_not_rounded_away_to_zero`,
+`tests/test_report_render.py::TestFormatGbPerDay`.
+
+---
+
+## D017 — El reporte excluye índices internos de Splunk (`_`-prefijo) de las tablas de datos
+
+**Contexto:** Fase 3C ("HTML quality review"). Contra el laboratorio real
+(con ruido residual de D010 y de las propias búsquedas de validación de
+sesiones anteriores), el reporte mostraba filas como `_internal:splunkd` y
+`_audit:audittrail` en "Ingestion Breakdown", "Usage Analysis" y el
+detalle completo -- con `0 GB/día` garantizado (esos índices nunca
+aparecen en `license_usage.log`, no están sujetos a licencia) y nombres
+que un Splunk Admin reconocería como "no es mi dato de negocio", pero que
+un manager/FinOps leyendo el mismo reporte no sabría interpretar.
+
+**Decisión:** `reports/render.py::build_report_context()` filtra cualquier
+`Dataset` cuyo `key.index` empiece con `_` antes de construir cualquier
+tabla, conteo o cifra del reporte (incluyendo `total_datasets`, que ahora
+se calcula como `len(datasets)` post-filtro en vez de
+`summary.total_datasets`, que se computó antes del filtro). El filtro es
+puramente de presentación: vive en la capa de reporte, no en
+`build_datasets`/`classify_all`/`compute_savings` -- esos módulos siguen
+viendo (y pueden seguir clasificando/auditando internamente) estos
+datasets si en algún momento hiciera falta, solo no se los muestra al
+lector final del reporte. No cambia ningún número de ahorro (estos
+datasets siempre aportan 0 GB).
+
+**Razón:** estos datasets nunca son parte del "spend" que el producto
+audita (D004/D010 ya establecían que el análisis es sobre el `spend` real
+del cliente); mostrarlos es ruido puro, nunca información accionable.
+
+**Tests:** `tests/test_report_render.py::TestReportOmitsInternalSplunkIndexes`.
+
+---
+
 ## D013 — Modelo de disponibilidad de señales (`SignalAvailability`)
 
 **Contexto:** Fase 3B. `RawCollection.sources_available` (y

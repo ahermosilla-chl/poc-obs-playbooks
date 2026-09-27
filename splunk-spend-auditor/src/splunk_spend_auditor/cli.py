@@ -21,6 +21,7 @@ from splunk_spend_auditor.analysis.build_datasets import build_datasets
 from splunk_spend_auditor.collector.csv_collector import RawCollection, load_from_directory
 from splunk_spend_auditor.collector.rest_collector import RestCollectionError, RestConfig
 from splunk_spend_auditor.collector.rest_collector import collect as collect_rest
+from splunk_spend_auditor.formatting import format_gb_per_day
 from splunk_spend_auditor.models import Classification
 from splunk_spend_auditor.reports.render import build_report_context, render_report
 from splunk_spend_auditor.scoring.classify_all import classify_all
@@ -100,6 +101,15 @@ def _collect_from_source(
         raise typer.Exit(code=1) from exc
 
 
+def _source_label(from_csv: Optional[str], host: Optional[str], port: int) -> str:
+    """Fase 3C ("Current Environment"): identificador NO sensible del
+    origen de los datos, para mostrar en el reporte -- nunca el token."""
+
+    if host:
+        return f"Splunk REST — {host}:{port}"
+    return f"CSV import — {from_csv}"
+
+
 def _run_pipeline(
     collection: RawCollection,
     lookback_days: int,
@@ -176,21 +186,21 @@ def quickscan(
         in (Classification.POSSIBLE_WASTE, Classification.REVIEW)
     ][:3]
 
-    typer.echo(f"Total ingest: {sum(d.ingest_gb_per_day for d in datasets):.1f} GB/day")
+    typer.echo(f"Total ingest: {format_gb_per_day(sum(d.ingest_gb_per_day for d in datasets))}/day")
     typer.echo("")
     typer.echo("Top 5 consumers by GB/day:")
     for i, d in enumerate(top5, 1):
-        typer.echo(f"  {i}. {d.key}  {d.ingest_gb_per_day:.1f} GB/day")
+        typer.echo(f"  {i}. {d.key}  {format_gb_per_day(d.ingest_gb_per_day)}/day")
     typer.echo("")
     if candidates:
         candidate_gb = sum(d.ingest_gb_per_day for d in candidates)
         pct = 100 * candidate_gb / (sum(d.ingest_gb_per_day for d in datasets) or 1)
         typer.echo(
             f"Review candidates (possible waste): {len(candidates)} datasets, "
-            f"{candidate_gb:.1f} GB/day ({pct:.1f}% of total)"
+            f"{format_gb_per_day(candidate_gb)}/day ({pct:.1f}% of total)"
         )
         for d in candidates:
-            typer.echo(f"  - {d.key}  {d.classification.value}  {d.ingest_gb_per_day:.1f} GB/day")
+            typer.echo(f"  - {d.key}  {d.classification.value}  {format_gb_per_day(d.ingest_gb_per_day)}/day")
     else:
         typer.echo("No optimization candidates found with the current thresholds.")
     typer.echo("")
@@ -242,14 +252,15 @@ def audit(
         tier=tier,
         redact_hosts=redact_hosts,
         redact_names=redact_names,
+        source_label=_source_label(from_csv, host, port),
     )
     format_list = [f.strip() for f in formats.split(",") if f.strip()]
     written = render_report(context, output_dir, format_list)
 
     typer.echo("Your Splunk Spend Audit is ready.")
     typer.echo("")
-    typer.echo(f"Current ingest: {savings.current_ingest_gb_day:.1f} GB/day")
-    typer.echo(f"Optimization candidates: {savings.candidate_gb_day:.1f} GB/day")
+    typer.echo(f"Current ingest: {format_gb_per_day(savings.current_ingest_gb_day)}/day")
+    typer.echo(f"Optimization candidates: {format_gb_per_day(savings.candidate_gb_day)}/day")
     typer.echo(f"Potential reduction: {savings.potential_reduction_pct * 100:.1f}%")
     if savings.potential_annual_saving is not None:
         typer.echo(f"Potential annual saving: ${savings.potential_annual_saving:,.0f}")

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 
+from splunk_spend_auditor.formatting import format_gb_per_day
 from splunk_spend_auditor.models import Classification, Dataset, ParserConfidence
 
 # docs/scoring.md sección 6 -- patrones protegidos por defecto. Case
@@ -207,7 +208,7 @@ def classify(
         # completa, exactamente el caso real que originó D015.
         missing_label = ", ".join(sorted(missing_for_zero_usage))
         return Classification.REVIEW, (
-            f"This dataset ingests {dataset.ingest_gb_per_day:.1f} GB/day "
+            f"This dataset ingests {format_gb_per_day(dataset.ingest_gb_per_day)}/day "
             f"and shows no usage in the signals that ARE available, but "
             f"{missing_label} could not be checked in this run "
             f"(insufficient visibility, not confirmed absence of usage). "
@@ -217,7 +218,7 @@ def classify(
     if is_high_ingest and has_zero_usage:
         return Classification.POSSIBLE_WASTE, (
             f"This dataset appears as a candidate because it ingests "
-            f"{dataset.ingest_gb_per_day:.1f} GB/day, has no interactive "
+            f"{format_gb_per_day(dataset.ingest_gb_per_day)}/day, has no interactive "
             f"searches in the last 90 days, and was not found in alerts, "
             f"dashboards, or scheduled saved searches."
         ), False
@@ -225,7 +226,7 @@ def classify(
     # Regla 5: REVIEW
     if has_zero_usage or dataset.interactive_searches_90d <= 2:
         return Classification.REVIEW, (
-            f"This dataset ingests {dataset.ingest_gb_per_day:.1f} GB/day "
+            f"This dataset ingests {format_gb_per_day(dataset.ingest_gb_per_day)}/day "
             f"with limited observed usage "
             f"({dataset.interactive_searches_90d} interactive searches in "
             "90 days). Manual validation recommended before any action."

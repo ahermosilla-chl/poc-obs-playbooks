@@ -4,6 +4,9 @@ Fuente: docs/splunk-data-sources.md, sección 1.
 Qué produce: totales de GB/día por sourcetype solamente, sin importar el
 index. Útil cuando el mismo sourcetype está duplicado en varios índices y se
 quiere ver el consumo total de esa categoría de datos.
+
+Precisión (Fase 3C): 6 decimales de GB, no 4 -- ver
+ingest_by_index_sourcetype.spl para el detalle.
 ```
 
 index=_internal source=*license_usage.log type="Usage"
@@ -11,7 +14,7 @@ earliest=-90d@d latest=now
 | eval sourcetypename=if(len(st)=0 OR isnull(st),"(UNKNOWN)",st)
 | bin _time span=1d
 | stats sum(b) as bytes by _time, sourcetypename
-| eval gb=round(bytes/1024/1024/1024, 4)
+| eval gb=round(bytes/1024/1024/1024, 6)
 | eval date=strftime(_time, "%Y-%m-%d")
 | table date, sourcetypename, gb
 | rename sourcetypename as sourcetype

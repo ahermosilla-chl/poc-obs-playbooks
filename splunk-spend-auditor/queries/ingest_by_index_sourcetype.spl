@@ -12,6 +12,16 @@ No requiere rol admin.
 
 Export a CSV: guarda el resultado como sample-data/schema/ingest_by_index_sourcetype.csv
 (mismo esquema que espera el CSVCollector: date, index, sourcetype, gb).
+
+CORREGIDO EN FASE 3C: `round(..., 4)` (4 decimales de GB) redondea a
+0.0000 cualquier dataset por debajo de ~50 KB/día -- confirmado
+empíricamente contra el laboratorio real (un dataset de 920 bytes/día
+quedaba en `gb=0`, indistinguible de "no ingiere nada" para el resto del
+pipeline). Con 6 decimales, la resolución mínima es ~1 KB/día, suficiente
+para no perder datasets de bajo volumen real (p.ej. un heartbeat/healthcheck
+poco frecuente -- exactamente el tipo de dataset de bajo volumen que este
+producto también audita, ver docs/scoring.md). No cambia el comportamiento
+para datasets de volumen normal/alto.
 ```
 
 index=_internal source=*license_usage.log type="Usage"
@@ -20,7 +30,7 @@ earliest=-90d@d latest=now
 | eval sourcetypename=if(len(st)=0 OR isnull(st),"(UNKNOWN)",st)
 | bin _time span=1d
 | stats sum(b) as bytes by _time, indexname, sourcetypename
-| eval gb=round(bytes/1024/1024/1024, 4)
+| eval gb=round(bytes/1024/1024/1024, 6)
 | eval date=strftime(_time, "%Y-%m-%d")
 | table date, indexname, sourcetypename, gb
 | rename indexname as index, sourcetypename as sourcetype

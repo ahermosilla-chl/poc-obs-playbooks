@@ -65,7 +65,14 @@ def build_datasets(
     for _, row in grouped.iterrows():
         key = DatasetKey(index=str(row["index"]), sourcetype=str(row["sourcetype"]))
         ds = _get(key)
-        ds.ingest_gb_per_day = round(float(row["mean"]), 4)
+        # Fase 3C: 8 decimales, no 4 -- con 4 decimales cualquier dataset
+        # por debajo de ~50 KB/día redondeaba a 0.0, indistinguible de "no
+        # ingiere nada" para el resto del pipeline (clasificación, ahorro,
+        # reporte). Confirmado empíricamente contra el laboratorio real
+        # (ver queries/ingest_by_index_sourcetype.spl, mismo bug, corregido
+        # ahí también -- éste es un segundo punto de redondeo en Python que
+        # reintroducía el mismo problema incluso con la query ya corregida).
+        ds.ingest_gb_per_day = round(float(row["mean"]), 8)
 
     # --- 2. Búsquedas interactivas (_audit) ---
     total_search_rows = 0

@@ -7,12 +7,15 @@ supera squash_threshold — en ese caso Splunk descarta el valor de host para
 esos eventos y este query subestimará el consumo real por host. Ver
 DECISIONS.md D004. Esta query es INFORMATIVA solamente — el motor de scoring
 nunca la usa como base de clasificación.
+
+Precisión (Fase 3C): 6 decimales de GB, no 3 -- ver
+ingest_by_index_sourcetype.spl para el detalle.
 ```
 
 index=_internal source=*license_usage.log type="Usage"
 earliest=-30d@d latest=now
 | eval hostname=if(len(h)=0 OR isnull(h),"(SQUASHED_OR_UNKNOWN)",h)
 | stats sum(b) as bytes by hostname
-| eval gb_total=round(bytes/1024/1024/1024, 3)
+| eval gb_total=round(bytes/1024/1024/1024, 6)
 | table hostname, gb_total
 | sort - gb_total
