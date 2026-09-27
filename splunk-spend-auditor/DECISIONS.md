@@ -5,6 +5,97 @@ una, para no volver a discutirlas desde cero en sesiones futuras.
 
 ---
 
+## D018 — Honestidad de lenguaje para `dashboards_used`; `last_seen` renombrado; procedencia del annual spend explícita
+
+**Contexto:** Fase 3C.1, revisión dirigida sobre el reporte de Fase 3C
+(veredicto MODIFY). Se pidió investigar tres "inconsistencias semánticas"
+concretas antes de cualquier validación externa.
+
+**1. `dashboards_used` se presentaba como certeza que no existía.**
+`Dataset.used_in_dashboards` es un `bool` que por diseño defaultea a
+`False` cuando la fuente nunca se evaluó (modo REST: siempre
+`NOT_APPLICABLE`, ver `collector/rest_collector.py` -- "fuente manual por
+diseño en AMBOS collectors", D002; modo CSV: `UNAVAILABLE` si no se exportó
+`dashboards_used.csv`). El reporte mostraba `Dashboards: No` y la
+explicación de `POSSIBLE_WASTE` afirmaba *"was not found in alerts,
+dashboards, or scheduled saved searches"* incluso cuando esa señal nunca
+se consultó -- una violación del principio "missing visibility != zero
+usage" en el TEXTO del reporte, no solo en la clasificación.
+
+Investigado el flujo completo (`models`, `scoring/rules.py`,
+`scoring/classify_all.py`, `reports/render.py`): el valor SÍ participa en
+clasificación (Regla 3 HIGH_VALUE, componente `has_zero_usage` de Regla 4
+POSSIBLE_WASTE) y en `data_value_score()` (bonus aditivo de +15 si es
+`True`). Como es **puramente aditivo** (nunca resta, nunca convierte un
+"no se sabe" en evidencia negativa) y como excluir `dashboards_used` de
+`SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE` (D013) fue una decisión
+deliberada y ya documentada en Fase 3B (agregarlo ahí bloquearía
+`POSSIBLE_WASTE` en casi todos los entornos reales, dado que la fuente es
+manual/opcional para prácticamente todos los usuarios) **no se revirtió esa
+decisión de clasificación**. Lo que sí era un bug real -- y se corrigió --
+es el LENGUAJE: `classify()` ahora recibe `dashboards_signal_available:
+bool` (calculado en `classify_all()` a partir de
+`sources_available["dashboards_used"] == SignalAvailability.AVAILABLE`,
+mismo criterio que D013/D014 para las demás fuentes) y solo afirma "no
+encontrado en dashboards" cuando la señal realmente se evaluó. El reporte
+(`reports/render.py` + templates) ahora muestra `Dashboards: Not evaluated`
+en vez de `No` cuando la fuente no está `AVAILABLE`, en lugar de inferir un
+"No" que nunca se confirmó.
+
+**2. `last_seen` estaba correctamente implementado, mal etiquetado.**
+Se verificó `queries/metadata_last_seen.spl` (usa `recentTime` de
+`metadata type=sourcetypes` -- tiempo de indexación del evento más
+reciente, actividad de DATOS, no de búsqueda), el modelo (`Dataset.
+last_seen_days_ago`, ya comentado como "Actividad de ingest") y el scoring
+(`scoring/rules.py`: **no lo usa en absoluto**, ni en `classify()` ni en
+`data_value_score()` -- confirmado por grep, es un campo puramente
+informativo). La semántica siempre fue correcta de punta a punta; el único
+bug real era la ETIQUETA visible: "Last observed: N days ago" en la misma
+línea que "Searches 90d: 0" se leía como si "observed" significara
+"buscado/consultado por un humano". Renombrado a "Last data observed" en
+ambos templates (HTML y Markdown) y en `docs/report-design.md`. No hay
+regresión de scoring que corregir porque nunca existió.
+
+**3. Procedencia del `annual_spend` no era lo bastante explícita.**
+Investigado: `$94,200` no es un default ni un valor hardcoded del
+producto (`cli.py`: `annual_spend: Optional[float] = typer.Option(None,
+...)` -- default `None`, `compute_savings(annual_spend=None)` ya deja
+`potential_annual_saving=None` de forma segura). El monto provino
+exclusivamente de pasar `--annual-spend 94200` al correr el audit real
+contra el laboratorio (siguiendo el ejemplo del propio README, que a su
+vez cita `docs/product-spec.md` como fuente de investigación de mercado,
+nunca un precio inferido). El cálculo (`annual_spend *
+potential_reduction_pct`) es puramente proporcional al % de volumen
+optimizable -- no asume ningún $/GB, por lo que es matemáticamente
+correcto sin importar cuán pequeño sea el volumen real medido (1.3 MB/día
+en el laboratorio vs. $94,200/año es una combinación válida, no un bug).
+El problema era de CLARIDAD: nada dejaba inequívoco, en el texto que ve el
+usuario, que ese monto es un input que la persona proporcionó, no algo que
+la herramienta "sabe" o midió. Ambos templates ahora dicen explícitamente
+*"(as provided for this audit, not measured or inferred by this tool)"* en
+el Executive Summary y *"(user-provided input, not measured by this
+tool)"* en la tabla "Current Spend".
+
+**Alcance deliberadamente NO tocado:** `SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE`
+sigue sin incluir `dashboards_used` (ver razón arriba); el bonus de
+`data_value_score()` para dashboards sigue siendo aditivo sin gating por
+disponibilidad (seguro por ser solo positivo); la fórmula de
+`compute_savings()` no cambió.
+
+**Tests:** `tests/test_rules.py::TestDashboardsSignalHonesty` (3),
+`tests/test_report_render.py::TestDashboardsSignalPresentation` (3),
+`tests/test_report_render.py::TestAnnualSpendProvenance` (2),
+`tests/test_report_render.py::TestLastSeenLabelDoesNotImplySearchActivity` (1).
+
+**Validación:** regenerado el audit real contra el laboratorio Splunk
+(mismos 7 datasets, token admin) -- confirmado en `/tmp/fase3c1_outputs/
+report.md`: `Dashboards: Not evaluated` en las 7 filas, explicación de
+`lsa_waste` sin afirmar "not found in ... dashboards", "Last data
+observed: 0.8 days ago", y ambas menciones de `$94,200` con su procedencia
+explícita.
+
+---
+
 ## D016 — Precisión de volumen (GB/día) elevada a 8 decimales; formateo auto-escalado
 
 **Contexto:** Fase 3C ("Verificar los números"). Al correr el audit real
@@ -81,6 +172,23 @@ audita (D004/D010 ya establecían que el análisis es sobre el `spend` real
 del cliente); mostrarlos es ruido puro, nunca información accionable.
 
 **Tests:** `tests/test_report_render.py::TestReportOmitsInternalSplunkIndexes`.
+
+**Addendum (Fase 3C.1):** la revisión de 3C.1 pidió verificar explícitamente
+que ocultar estas filas nunca pudiera dejar un total ejecutivo sin poder
+reconciliarse con las tablas visibles ("Executive total != suma explicable
+de resultados visibles"). Verificado empíricamente contra el laboratorio
+real (`index=_internal source=*license_usage.log type="Usage"`): ningún
+índice interno aparece jamás en `license_usage.log` en esta instancia de
+Splunk Enterprise -- confirma que el supuesto "0 GB garantizado" del
+párrafo de arriba es cierto en la práctica, no solo en teoría. Aun así, el
+filtro se endureció para no depender de esa suposición: ahora solo oculta
+un índice `_`-prefijo cuando `ingest_gb_per_day == 0.0` exactamente
+(`d.key.index.startswith("_") and d.ingest_gb_per_day == 0.0`). Si algún
+día un índice interno SÍ trajera volumen real (p.ej. un CSV manual mal
+formado en modo CSV, o una versión de Splunk que sí mida uso interno),
+seguiría siendo visible -- así la garantía "nunca se oculta dinero" es por
+construcción del código, no por una suposición sobre los datos de origen.
+Test: `tests/test_report_render.py::TestInternalIndexFilterNeverHidesRealVolume`.
 
 ---
 

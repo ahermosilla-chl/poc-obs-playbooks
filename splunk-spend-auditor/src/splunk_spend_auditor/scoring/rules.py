@@ -86,6 +86,7 @@ def classify(
     high_ingest_threshold_gb: float,
     environment_partial_unknown_ratio: float,
     unavailable_signals: frozenset[str] = frozenset(),
+    dashboards_signal_available: bool = True,
 ) -> tuple[Classification, str, bool]:
     """docs/scoring.md sección 5. Devuelve
     (categoría, explicación, excluded_from_savings).
@@ -117,7 +118,19 @@ def classify(
     trae el Dataset en esos campos podría ser "confirmado" o simplemente
     "nunca se pudo consultar" y este parámetro es la única forma de
     distinguirlos en este punto (Dataset por sí solo no lo sabe -- ver
-    docs/architecture.md, "Manejo de errores")."""
+    docs/architecture.md, "Manejo de errores").
+
+    dashboards_signal_available (Fase 3C.1/D018): True solo cuando
+    `dashboards_used` fue SignalAvailability.AVAILABLE en este run (el
+    usuario exportó dashboards_used.csv con evidencia real). Este parámetro
+    NO cambia qué clasificación se alcanza -- dashboards_used sigue sin
+    estar en SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE, deliberadamente (ver
+    el comentario de esa constante más arriba) -- solo cambia el TEXTO de la
+    explicación para POSSIBLE_WASTE: si la señal nunca se evaluó, el texto
+    no puede afirmar "no encontrado en dashboards" (eso sería una afirmación
+    falsa de certeza sobre algo que nunca se consultó), aunque
+    `dataset.used_in_dashboards` internamente siga en su valor por defecto
+    (False) para el cálculo de has_zero_usage/data_value_score."""
 
     # Regla 1: PROTECTED
     if dataset.is_protected:
@@ -216,11 +229,23 @@ def classify(
             f"POSSIBLE_WASTE, until those signals are available."
         ), True
     if is_high_ingest and has_zero_usage:
+        # Fase 3C.1/D018: dashboards_used nunca puede describirse como "no
+        # encontrado" si la señal no se evaluó en este run -- ver docstring
+        # de dashboards_signal_available arriba. El campo interno sigue
+        # participando en has_zero_usage tal como antes (comportamiento de
+        # clasificación sin cambios); solo el TEXTO deja de afirmar algo que
+        # nunca se consultó.
+        if dashboards_signal_available:
+            usage_clause = "was not found in alerts, dashboards, or scheduled saved searches"
+        else:
+            usage_clause = (
+                "was not found in alerts or scheduled saved searches (dashboard "
+                "usage was not evaluated in this run -- see Methodology)"
+            )
         return Classification.POSSIBLE_WASTE, (
             f"This dataset appears as a candidate because it ingests "
             f"{format_gb_per_day(dataset.ingest_gb_per_day)}/day, has no interactive "
-            f"searches in the last 90 days, and was not found in alerts, "
-            f"dashboards, or scheduled saved searches."
+            f"searches in the last 90 days, and {usage_clause}."
         ), False
 
     # Regla 5: REVIEW

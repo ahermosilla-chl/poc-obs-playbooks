@@ -1,20 +1,27 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 3C (Real Reporting Validation)
+Última actualización: cierre de Fase 3C.1 (correcciones de honestidad
+semántica sobre la Fase 3C)
 
 ## Estado actual
 
-**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C completada.** El MVP
-técnico (Fase 2) está construido, probado y validado end-to-end contra un
-escenario sintético. Fase 3A validó ese mismo diseño contra una instancia
-Splunk Enterprise real y encontró y corrigió 3 bugs reales (D010/D011/D012).
-Fase 3B endureció el pipeline completo contra pérdida de señales y errores
-REST reales, y encontró y corrigió un bug de seguridad crítico (D014). D015
-(único blocker de Fase 3B) se resolvió con un preflight determinista de
-autorización. Fase 3C ejecutó el producto end-to-end contra Splunk real
-(quickscan + audit + HTML + Markdown), verificó los números contra la fuente
-y encontró y corrigió 3 bugs reales de precisión numérica (D016) más un
-problema de ruido en el reporte (D017) -- ver sección "Fase 3C" abajo.
+**Fase 2, 3A, 3B completadas. D015 resuelto. Fase 3C y 3C.1 completadas.**
+El MVP técnico (Fase 2) está construido, probado y validado end-to-end
+contra un escenario sintético. Fase 3A validó ese mismo diseño contra una
+instancia Splunk Enterprise real y encontró y corrigió 3 bugs reales
+(D010/D011/D012). Fase 3B endureció el pipeline completo contra pérdida de
+señales y errores REST reales, y encontró y corrigió un bug de seguridad
+crítico (D014). D015 (único blocker de Fase 3B) se resolvió con un
+preflight determinista de autorización. Fase 3C ejecutó el producto
+end-to-end contra Splunk real (quickscan + audit + HTML + Markdown),
+verificó los números contra la fuente y encontró y corrigió 3 bugs reales
+de precisión numérica (D016) más un problema de ruido en el reporte
+(D017). La revisión de Fase 3C devolvió veredicto **MODIFY**: el reporte
+generado presentaba tres inconsistencias semánticas (señal de dashboards
+mostrada como "No" cuando nunca se evaluó, etiqueta de `last_seen`
+ambigua, procedencia del annual spend poco clara) -- todas corregidas en
+Fase 3C.1 (D018), sin reabrir ninguna decisión de clasificación ya
+tomada. Ver sección "Fase 3C.1" abajo.
 
 ## Fase 3C — Real Reporting Validation (COMPLETADA)
 
@@ -102,6 +109,73 @@ trazando 2 datasets concretos (`lsa_high_value`, `lsa_waste`) desde bytes
 crudos de `license_usage.log` hasta el reporte final -- ver informe
 entregado al usuario, sección C, para la traza completa con números
 exactos en cada paso. Todos los números coinciden.
+
+## Fase 3C.1 — Correcciones de honestidad semántica (COMPLETADA)
+
+**Veredicto recibido sobre Fase 3C:** MODIFY. Iteración corta y dirigida a
+3 inconsistencias semánticas concretas detectadas en el reporte real
+generado en Fase 3C -- ninguna reabre el diseño general del producto.
+
+**Baseline confirmado antes de modificar:** 124 tests passing (exacto,
+como se esperaba desde el cierre de Fase 3C).
+
+**1. `dashboards_used` mostrado como "No" sin haberse evaluado.** El
+reporte mostraba `Dashboards: No` y la explicación de `POSSIBLE_WASTE`
+afirmaba *"was not found in ... dashboards"* incluso en modo REST, donde
+esa fuente es `NOT_APPLICABLE` por diseño (nunca se consulta -- D002).
+Investigado el flujo completo: el campo SÍ participa en clasificación
+(HIGH_VALUE, `has_zero_usage`) y en `data_value_score()` (bonus aditivo),
+pero de forma segura (solo suma, nunca resta evidencia). Se decidió **no
+tocar la clasificación** -- `dashboards_used` sigue deliberadamente fuera
+de `SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE` (decisión ya razonada en
+D013: incluirlo bloquearía `POSSIBLE_WASTE` en casi todos los entornos
+reales) -- y corregir el LENGUAJE: `classify()` ahora sabe si la señal fue
+evaluada (`dashboards_signal_available`) y el reporte muestra
+`Dashboards: Not evaluated` en vez de "No" cuando corresponde. Ver D018.
+
+**2. Etiqueta de `last_seen` ambigua.** Verificada la semántica completa
+(`queries/metadata_last_seen.spl` usa `recentTime`, actividad de datos, no
+de búsqueda; el scoring **nunca** usa este campo, confirmado por
+inspección directa de `scoring/rules.py`) -- la lógica siempre fue
+correcta, solo la etiqueta visible ("Last observed: N days ago", junto a
+"Searches 90d: 0") podía leerse como actividad de búsqueda. Renombrada a
+"Last data observed" en ambos templates y en la documentación. No hubo
+bug de scoring que corregir -- confirmado explícitamente, no asumido.
+
+**3. Procedencia del annual spend poco explícita.** Confirmado que
+`$94,200` no es un default ni un valor hardcoded (`--annual-spend` es
+`None` por defecto en el CLI); provino de haber pasado ese valor
+explícitamente al correr el audit real, siguiendo el ejemplo del propio
+README. El cálculo (proporcional al % de volumen optimizable) es correcto
+independientemente del volumen absoluto medido. Se reforzó el TEXTO del
+reporte para dejar inequívoco que es un input del usuario, no algo medido
+o inferido por la herramienta, tanto en el Executive Summary como en la
+tabla "Current Spend".
+
+**D017 (extendida):** verificado empíricamente contra el laboratorio real
+que `license_usage.log` nunca incluye índices internos (confirma que
+"0 GB garantizado" era cierto en la práctica); el filtro de índices
+internos se endureció igual para no depender de esa suposición -- ahora
+solo oculta filas con `ingest_gb_per_day == 0.0` exactamente, así que un
+índice interno con volumen real (hipotético, no observado) seguiría
+visible. Ver D017, sección "Addendum".
+
+**Regenerado el audit real** contra `splunk-lab` (mismos 7 datasets,
+modo REST, token admin) para confirmar las tres correcciones end-to-end,
+no solo con tests unitarios -- ver informe entregado al usuario al cierre
+de esta iteración para el detalle completo.
+
+**Tests:** 135 passing (124 baseline + 11 nuevos: 3 de
+`TestDashboardsSignalHonesty`, 3 de `TestDashboardsSignalPresentation`, 2
+de `TestAnnualSpendProvenance`, 2 de
+`TestInternalIndexFilterNeverHidesRealVolume`, 1 de
+`TestLastSeenLabelDoesNotImplySearchActivity`). Cero regresiones. CI sigue
+sin depender de Splunk/Docker/red real.
+
+**Explícitamente NO tocado en esta iteración:** el riesgo análogo a D015
+para `saved_searches`/`list_settings` (sigue documentado como pendiente,
+no apareció como bug reproducible durante 3C.1); CSV export (sigue sin
+implementar); ninguna fase comercial/SaaS/de publicación.
 
 ## Pendientes reales (no triviales)
 

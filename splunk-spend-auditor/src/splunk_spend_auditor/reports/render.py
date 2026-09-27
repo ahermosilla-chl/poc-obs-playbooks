@@ -91,9 +91,33 @@ def build_report_context(
     # puramente de presentación, no cambia ningún número. Se filtra en la
     # capa de reporte, no en build_datasets/classify_all/compute_savings,
     # para no tocar la lógica de análisis -- ver docs/architecture.md.
-    datasets = [d for d in datasets if not d.key.index.startswith("_")]
+    # Fase 3C.1/D018: solo se oculta un índice interno cuando NO tiene
+    # volumen (el caso real y único observado -- confirmado empíricamente
+    # contra el laboratorio real: license_usage.log nunca incluye índices
+    # internos). Si alguna vez un índice `_`-prefijo SÍ trae ingest_gb_per_day
+    # > 0 (p.ej. un CSV manual mal formado), se sigue mostrando -- así el
+    # total ejecutivo nunca puede incluir dinero que las tablas visibles no
+    # puedan explicar (ver DECISIONS.md D017).
+    datasets = [
+        d for d in datasets if not (d.key.index.startswith("_") and d.ingest_gb_per_day == 0.0)
+    ]
 
     high_ingest_threshold = high_ingest_threshold_for(datasets)
+
+    # Fase 3C.1/D018: "dashboards_used" es una fuente manual/opcional (D002)
+    # -- en modo REST siempre es NOT_APPLICABLE (nunca se evalúa) y en modo
+    # CSV depende de si el usuario exportó el archivo opcional. Mostrar
+    # "No" cuando en realidad nunca se consultó viola "missing visibility !=
+    # zero usage" -- ver scoring/rules.py, docstring de
+    # dashboards_signal_available.
+    dashboards_evaluated = (
+        summary.sources_available.get("dashboards_used") == SignalAvailability.AVAILABLE
+    )
+
+    def _dashboards_display(ds: Dataset) -> str:
+        if ds.used_in_dashboards:
+            return "Yes"
+        return "No" if dashboards_evaluated else "Not evaluated"
 
     name_map: dict[str, str] = {}
     if redact_names:
@@ -129,6 +153,7 @@ def build_report_context(
             "is_scheduled": ds.is_scheduled,
             "has_alert": ds.has_alert_action,
             "used_in_dashboards": ds.used_in_dashboards,
+            "dashboards_display": _dashboards_display(ds),
             "unique_users_30d": ds.unique_users_30d,
             "last_seen_days_ago": ds.last_seen_days_ago,
             "confidence": ds.parser_confidence.value,
@@ -152,6 +177,7 @@ def build_report_context(
             "is_scheduled": ds.is_scheduled,
             "has_alert": ds.has_alert_action,
             "used_in_dashboards": ds.used_in_dashboards,
+            "dashboards_display": _dashboards_display(ds),
             "last_seen_days_ago": ds.last_seen_days_ago,
             "classification": ds.classification.value,
             "explanation": ds.explanation,

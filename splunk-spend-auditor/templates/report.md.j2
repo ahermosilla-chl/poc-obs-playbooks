@@ -12,7 +12,7 @@ Of that, **{{ savings_display.candidate_gb_day }}/day**
 optimization candidates with low or no observed usage.
 
 {% if savings.potential_annual_saving is not none %}
-Based on {% if savings.annual_spend_input is not none %}an estimated annual spend of **${{ "{:,.0f}".format(savings.annual_spend_input) }}**{% else %}the cost-per-GB/day provided{% endif %}, this represents a **potential annual saving of around ${{ "{:,.0f}".format(savings.potential_annual_saving) }}**.
+Based on {% if savings.annual_spend_input is not none %}an annual Splunk spend of **${{ "{:,.0f}".format(savings.annual_spend_input) }}** *(as provided for this audit, not measured or inferred by this tool)*{% else %}the cost-per-GB/day provided{% endif %}, this represents a **potential annual saving of around ${{ "{:,.0f}".format(savings.potential_annual_saving) }}**.
 {% endif %}
 
 _This is a potential saving, not a guaranteed one — see "Risk Considerations"._
@@ -36,9 +36,9 @@ _This is a potential saving, not a guaranteed one — see "Risk Considerations".
 |---|---|
 | Current ingest | {{ current_ingest_display }}/day |
 {% if savings.annual_spend_input is not none %}
-| Estimated annual spend (input) | ${{ "{:,.0f}".format(savings.annual_spend_input) }} |
+| Annual Splunk spend used for this estimate | ${{ "{:,.0f}".format(savings.annual_spend_input) }} *(user-provided input, not measured by this tool)* |
 {% elif savings.cost_per_gb_day_input is not none %}
-| Cost per GB/day (input) | ${{ savings.cost_per_gb_day_input }} |
+| Cost per GB/day used for this estimate | ${{ savings.cost_per_gb_day_input }} *(user-provided input)* |
 {% else %}
 | Spend estimate | Not provided — showing volume/percentage only |
 {% endif %}
@@ -59,10 +59,10 @@ _Showing top {{ ingestion_breakdown | length }} of {{ total_datasets }} datasets
 {% if usage_analysis %}
 ## Usage Analysis
 
-| Dataset | Searches 30d | Searches 90d | Scheduled | Alert | Dashboard | Users 30d | Last seen (days) | Confidence |
+| Dataset | Searches 30d | Searches 90d | Scheduled | Alert | Dashboard | Users 30d | Last data observed (days) | Confidence |
 |---|---|---|---|---|---|---|---|---|
 {% for row in usage_analysis %}
-| `{{ row.name }}` | {{ row.searches_30d }} | {{ row.searches_90d }} | {{ "Yes" if row.is_scheduled else "No" }} | {{ "Yes" if row.has_alert else "No" }} | {{ "Yes" if row.used_in_dashboards else "No" }} | {{ row.unique_users_30d }} | {{ row.last_seen_days_ago if row.last_seen_days_ago is not none else "—" }} | {{ row.confidence }} |
+| `{{ row.name }}` | {{ row.searches_30d }} | {{ row.searches_90d }} | {{ "Yes" if row.is_scheduled else "No" }} | {{ "Yes" if row.has_alert else "No" }} | {{ row.dashboards_display }} | {{ row.unique_users_30d }} | {{ row.last_seen_days_ago if row.last_seen_days_ago is not none else "—" }} | {{ row.confidence }} |
 {% endfor %}
 {% endif %}
 
@@ -72,7 +72,7 @@ _Showing top {{ ingestion_breakdown | length }} of {{ total_datasets }} datasets
 {% for c in top_candidates %}
 ### `{{ c.name }}` — {{ c.classification }}
 
-Ingest: {{ c.gb_per_day_display }}/day · Searches 30d: {{ c.searches_30d }} · Searches 90d: {{ c.searches_90d }} · Scheduled: {{ "Yes" if c.is_scheduled else "No" }} · Alerts: {{ "Yes" if c.has_alert else "No" }} · Dashboards: {{ "Yes" if c.used_in_dashboards else "No" }}{% if c.last_seen_days_ago is not none %} · Last observed: {{ c.last_seen_days_ago }} days ago{% endif %}
+Ingest: {{ c.gb_per_day_display }}/day · Searches 30d: {{ c.searches_30d }} · Searches 90d: {{ c.searches_90d }} · Scheduled: {{ "Yes" if c.is_scheduled else "No" }} · Alerts: {{ "Yes" if c.has_alert else "No" }} · Dashboards: {{ c.dashboards_display }}{% if c.last_seen_days_ago is not none %} · Last data observed: {{ c.last_seen_days_ago }} days ago{% endif %}
 
 {{ c.explanation }}
 

@@ -9,7 +9,14 @@ import pytest
 from splunk_spend_auditor.analysis.build_datasets import build_datasets
 from splunk_spend_auditor.collector.csv_collector import load_from_directory
 from splunk_spend_auditor.formatting import format_gb_per_day
-from splunk_spend_auditor.models import Classification, Dataset, DatasetKey
+from splunk_spend_auditor.models import (
+    Classification,
+    Dataset,
+    DatasetKey,
+    EnvironmentSummary,
+    ParserConfidence,
+    SignalAvailability,
+)
 from splunk_spend_auditor.reports.render import build_report_context, render_report
 from splunk_spend_auditor.scoring.classify_all import classify_all
 from splunk_spend_auditor.scoring.savings import compute_savings
@@ -20,8 +27,14 @@ CASE_MIXED_DIR = Path(__file__).parent.parent / "sample-data" / "case_mixed"
 def _classified():
     collection = load_from_directory(CASE_MIXED_DIR)
     datasets, summary = build_datasets(collection)
+    # sources_available=summary.sources_available (Fase 3C.1): replica el
+    # wiring real de cli.py -- omitirlo (como antes) dejaba
+    # dashboards_signal_available siempre en False dentro de classify_all,
+    # aunque case_mixed sí trae dashboards_used.csv real.
     datasets = classify_all(
-        datasets, environment_partial_unknown_ratio=summary.partial_or_unknown_ratio
+        datasets,
+        environment_partial_unknown_ratio=summary.partial_or_unknown_ratio,
+        sources_available=summary.sources_available,
     )
     savings = compute_savings(datasets, annual_spend=94_200)
     return datasets, summary, savings
@@ -152,3 +165,157 @@ class TestCountsSummaryLine:
             d.classification = Classification.REVIEW
         context = build_report_context(datasets, summary, savings, tier="pro")
         assert expected_fragment in context["counts_summary_line"]
+
+
+def _rest_like_environment_without_dashboards_signal():
+    """Fase 3C.1/D018: replica el caso REST real -- dashboards_used nunca
+    se evalúa (NOT_APPLICABLE), pero hay un candidato POSSIBLE_WASTE
+    genuino (alto ingest, cero uso confirmado en las fuentes disponibles)."""
+
+    datasets = [
+        Dataset(
+            key=DatasetKey(index="idx_waste", sourcetype="st_waste"),
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            parser_confidence=ParserConfidence.HIGH,
+        ),
+        Dataset(
+            key=DatasetKey(index="idx_normal", sourcetype="st_normal"),
+            ingest_gb_per_day=1.0,
+            interactive_searches_90d=5,
+            parser_confidence=ParserConfidence.HIGH,
+        ),
+    ]
+    sources_available = {
+        "ingest": SignalAvailability.AVAILABLE,
+        "audit_searches": SignalAvailability.AVAILABLE,
+        "saved_searches": SignalAvailability.AVAILABLE,
+        "last_seen": SignalAvailability.AVAILABLE,
+        "dashboards_used": SignalAvailability.NOT_APPLICABLE,
+        "protected_overrides": SignalAvailability.NOT_APPLICABLE,
+    }
+    summary = EnvironmentSummary(
+        total_datasets=len(datasets),
+        sources_available=sources_available,
+    )
+    datasets = classify_all(
+        datasets, environment_partial_unknown_ratio=0.0, sources_available=sources_available
+    )
+    savings = compute_savings(datasets, annual_spend=94_200)
+    return datasets, summary, savings
+
+
+class TestDashboardsSignalPresentation:
+    """Fase 3C.1/D018: la Fase 3C mostraba 'Dashboards: No' y una
+    explicación afirmando 'was not found in ... dashboards' incluso en modo
+    REST, donde esa señal es NOT_APPLICABLE (nunca se consulta) -- viola
+    missing visibility != zero usage en el lenguaje del reporte, no solo en
+    la clasificación."""
+
+    def test_unavailable_dashboard_signal_is_not_rendered_as_no(self):
+        datasets, summary, savings = _rest_like_environment_without_dashboards_signal()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+
+        rows = context["usage_analysis"] + context["top_candidates"]
+        assert rows, "el fixture debe producir al menos una fila para revisar"
+        for row in rows:
+            assert row["dashboards_display"] == "Not evaluated"
+            assert row["dashboards_display"] != "No"
+
+    def test_unavailable_dashboard_signal_is_not_described_as_absence_of_usage(self):
+        datasets, summary, savings = _rest_like_environment_without_dashboards_signal()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+
+        waste_candidate = next(
+            c for c in context["top_candidates"] if c["classification"] == "POSSIBLE_WASTE"
+        )
+        explanation = waste_candidate["explanation"].lower()
+        assert "not found in alerts, dashboards" not in explanation
+        assert "not evaluated in this run" in explanation
+
+    def test_available_dashboard_signal_still_renders_yes_no(self):
+        """Control: en case_mixed (dashboards_used.csv presente), la señal
+        SÍ se evaluó -- debe seguir mostrando Yes/No, nunca "Not evaluated"
+        (no perder información real por exceso de cautela)."""
+        datasets, summary, savings = _classified()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+        displays = {row["dashboards_display"] for row in context["usage_analysis"]}
+        assert displays <= {"Yes", "No"}
+
+
+class TestAnnualSpendProvenance:
+    """Fase 3C.1: el reporte debe dejar inequívoco que el annual spend es
+    un input del usuario, no algo medido/inferido por la herramienta --
+    evita que un monto grande junto a un volumen de ingest pequeño (o
+    cualquier otra combinación) se lea como una cifra que la herramienta
+    "sabe" por su cuenta."""
+
+    def test_rendered_report_labels_annual_spend_as_user_provided(self, tmp_path):
+        datasets, summary, savings = _classified()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+        written = render_report(context, tmp_path, ["html", "md"])
+        for path in written.values():
+            text = path.read_text().lower()
+            assert "user-provided" in text or "as provided for this audit" in text
+
+    def test_no_spend_input_never_implies_user_provided_language(self, tmp_path):
+        """Cuando no se dio ningún input de costo, no debe aparecer texto de
+        procedencia de un monto que no existe."""
+        datasets, summary, savings = _classified()
+        savings_no_spend = compute_savings(datasets)
+        context = build_report_context(datasets, summary, savings_no_spend, tier="pro")
+        written = render_report(context, tmp_path, ["html", "md"])
+        for path in written.values():
+            text = path.read_text()
+            assert "Not provided" in text or "Not provided" in text.title()
+
+
+class TestInternalIndexFilterNeverHidesRealVolume:
+    """Fase 3C.1/D017 (extiende la corrección de Fase 3C): el filtro de
+    índices internos (_internal, _audit, ...) solo debe ocultar filas sin
+    volumen real. Si alguna vez un índice interno SÍ trae
+    ingest_gb_per_day > 0 (p.ej. un CSV manual mal formado, o una versión
+    de Splunk que sí mide uso interno), debe seguir visible -- de lo
+    contrario el total ejecutivo incluiría dinero que ninguna tabla visible
+    puede explicar."""
+
+    def _dataset(self, index: str, gb: float, classification: Classification) -> Dataset:
+        ds = Dataset(key=DatasetKey(index=index, sourcetype="st"))
+        ds.ingest_gb_per_day = gb
+        ds.classification = classification
+        ds.explanation = "test"
+        ds.data_value_score = 0
+        return ds
+
+    def test_zero_volume_internal_dataset_is_hidden(self):
+        datasets, summary, savings = _classified()
+        datasets = list(datasets) + [self._dataset("_internal", 0.0, Classification.HIGH_VALUE)]
+        context = build_report_context(datasets, summary, savings, tier="pro")
+        names = [row["name"] for row in context["all_datasets_detail"]]
+        assert not any(name.startswith("_internal") for name in names)
+
+    def test_internal_dataset_with_real_volume_stays_visible(self):
+        datasets, summary, savings = _classified()
+        datasets = list(datasets) + [
+            self._dataset("_internal", 5.0, Classification.POSSIBLE_WASTE)
+        ]
+        context = build_report_context(datasets, summary, savings, tier="pro")
+        names = [row["name"] for row in context["all_datasets_detail"]]
+        assert any(name.startswith("_internal") for name in names)
+
+
+class TestLastSeenLabelDoesNotImplySearchActivity:
+    """Fase 3C.1: 'Last observed: N days ago', mostrado justo al lado de
+    'Searches 90d: 0', se leía como si fuera actividad de búsqueda. La
+    señal viene de metadata type=sourcetypes (actividad de datos/ingest) --
+    ver queries/metadata_last_seen.spl. El label debe ser inequívoco."""
+
+    def test_html_and_md_use_last_data_observed_label(self, tmp_path):
+        datasets, summary, savings = _classified()
+        context = build_report_context(datasets, summary, savings, tier="pro")
+        written = render_report(context, tmp_path, ["html", "md"])
+        for path in written.values():
+            text = path.read_text()
+            if "days ago" in text or "Last" in text:
+                assert "Last data observed" in text
+                assert "Last observed" not in text

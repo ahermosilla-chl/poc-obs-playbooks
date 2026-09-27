@@ -54,7 +54,8 @@
   {% if savings.potential_annual_saving is not none %}
   <p>Based on
      {% if savings.annual_spend_input is not none %}
-     an estimated annual spend of <strong>${{ "{:,.0f}".format(savings.annual_spend_input) }}</strong>,
+     an annual Splunk spend of <strong>${{ "{:,.0f}".format(savings.annual_spend_input) }}</strong>
+     <em>(as provided for this audit, not measured or inferred by this tool)</em>,
      {% else %}
      the cost-per-GB/day you provided,
      {% endif %}
@@ -80,9 +81,9 @@
 <table>
   <tr><th>Current ingest</th><td>{{ current_ingest_display }}/day</td></tr>
   {% if savings.annual_spend_input is not none %}
-  <tr><th>Estimated annual spend (input)</th><td>${{ "{:,.0f}".format(savings.annual_spend_input) }}</td></tr>
+  <tr><th>Annual Splunk spend used for this estimate</th><td>${{ "{:,.0f}".format(savings.annual_spend_input) }} <em>(user-provided input, not measured by this tool)</em></td></tr>
   {% elif savings.cost_per_gb_day_input is not none %}
-  <tr><th>Cost per GB/day (input)</th><td>${{ savings.cost_per_gb_day_input }}</td></tr>
+  <tr><th>Cost per GB/day used for this estimate</th><td>${{ savings.cost_per_gb_day_input }} <em>(user-provided input)</em></td></tr>
   {% else %}
   <tr><th>Spend estimate</th><td>Not provided — showing volume/percentage only</td></tr>
   {% endif %}
@@ -104,7 +105,7 @@
 {% if usage_analysis %}
 <h2>Usage Analysis</h2>
 <table>
-  <tr><th>Dataset</th><th>Searches 30d</th><th>Searches 90d</th><th>Scheduled</th><th>Alert</th><th>Dashboard</th><th>Users 30d</th><th>Last seen (days)</th><th>Confidence</th></tr>
+  <tr><th>Dataset</th><th>Searches 30d</th><th>Searches 90d</th><th>Scheduled</th><th>Alert</th><th>Dashboard</th><th>Users 30d</th><th>Last data observed (days)</th><th>Confidence</th></tr>
   {% for row in usage_analysis %}
   <tr>
     <td><code>{{ row.name }}</code></td>
@@ -112,7 +113,7 @@
     <td>{{ row.searches_90d }}</td>
     <td>{{ "Yes" if row.is_scheduled else "No" }}</td>
     <td>{{ "Yes" if row.has_alert else "No" }}</td>
-    <td>{{ "Yes" if row.used_in_dashboards else "No" }}</td>
+    <td>{{ row.dashboards_display }}</td>
     <td>{{ row.unique_users_30d }}</td>
     <td>{{ row.last_seen_days_ago if row.last_seen_days_ago is not none else "—" }}</td>
     <td>{{ row.confidence }}</td>
@@ -132,8 +133,8 @@
       Searches 90d: {{ c.searches_90d }} ·
       Scheduled: {{ "Yes" if c.is_scheduled else "No" }} ·
       Alerts: {{ "Yes" if c.has_alert else "No" }} ·
-      Dashboards: {{ "Yes" if c.used_in_dashboards else "No" }}
-      {% if c.last_seen_days_ago is not none %} · Last observed: {{ c.last_seen_days_ago }} days ago{% endif %}
+      Dashboards: {{ c.dashboards_display }}
+      {% if c.last_seen_days_ago is not none %} · Last data observed: {{ c.last_seen_days_ago }} days ago{% endif %}
     </p>
     <p class="candidate-explanation">{{ c.explanation }}</p>
     <p class="candidate-recommendation">Recommendation: {{ c.recommendation }}</p>

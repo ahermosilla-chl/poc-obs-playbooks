@@ -200,6 +200,64 @@ class TestPossibleWaste:
         assert classification == Classification.HIGH_VALUE
 
 
+class TestDashboardsSignalHonesty:
+    """Fase 3C.1/D018: bug real -- `dashboards_used` defaultea a False
+    cuando la señal nunca se evaluó (REST siempre, CSV sin el archivo
+    opcional), y el texto de POSSIBLE_WASTE afirmaba 'not found in ...
+    dashboards' como si se hubiera confirmado. missing visibility != zero
+    usage aplica también al lenguaje explicativo, no solo a la
+    clasificación."""
+
+    def test_possible_waste_explanation_does_not_claim_dashboards_checked_when_unevaluated(self):
+        ds = _ds(
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            parser_confidence=ParserConfidence.UNKNOWN,
+        )
+        classification, explanation, _ = classify(
+            ds,
+            HIGH_INGEST_THRESHOLD,
+            LOW_PARTIAL_RATIO,
+            dashboards_signal_available=False,
+        )
+        assert classification == Classification.POSSIBLE_WASTE
+        assert "dashboards" not in explanation.lower() or "not evaluated" in explanation.lower()
+        assert "not found in alerts, dashboards, or scheduled" not in explanation
+
+    def test_possible_waste_explanation_still_mentions_dashboards_when_evaluated(self):
+        """Comportamiento previo intacto cuando la señal SÍ se evaluó (p.ej.
+        modo CSV con dashboards_used.csv presente) -- no se pierde
+        información real cuando existe."""
+        ds = _ds(
+            ingest_gb_per_day=50.0,
+            interactive_searches_90d=0,
+            parser_confidence=ParserConfidence.UNKNOWN,
+        )
+        classification, explanation, _ = classify(
+            ds,
+            HIGH_INGEST_THRESHOLD,
+            LOW_PARTIAL_RATIO,
+            dashboards_signal_available=True,
+        )
+        assert classification == Classification.POSSIBLE_WASTE
+        assert "dashboards" in explanation.lower()
+
+    def test_dashboards_availability_never_changes_the_classification_itself(self):
+        """El texto cambia, la clasificación NO -- dashboards_used sigue
+        deliberadamente fuera de SOURCES_REQUIRED_FOR_CONFIRMED_ZERO_USAGE
+        (ver rules.py); esto es una corrección de honestidad de lenguaje,
+        no una regla de bloqueo nueva."""
+        ds_a = _ds(ingest_gb_per_day=50.0, parser_confidence=ParserConfidence.UNKNOWN)
+        ds_b = _ds(ingest_gb_per_day=50.0, parser_confidence=ParserConfidence.UNKNOWN)
+        classification_available, _, _ = classify(
+            ds_a, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, dashboards_signal_available=True
+        )
+        classification_unavailable, _, _ = classify(
+            ds_b, HIGH_INGEST_THRESHOLD, LOW_PARTIAL_RATIO, dashboards_signal_available=False
+        )
+        assert classification_available == classification_unavailable == Classification.POSSIBLE_WASTE
+
+
 class TestSignalAvailabilityGating:
     """Fase 3B (D013/D014): la pérdida de audit_searches/saved_searches
     nunca puede convertir un dataset en un candidato MÁS agresivo. Ver

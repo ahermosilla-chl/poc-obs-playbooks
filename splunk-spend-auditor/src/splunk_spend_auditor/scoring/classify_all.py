@@ -70,10 +70,22 @@ def classify_all(
     ingest_values = [d.ingest_gb_per_day for d in datasets]
     high_ingest_threshold = _percentile(ingest_values, HIGH_INGEST_PERCENTILE)
     unavailable = unavailable_signals_from(sources_available)
+    # Fase 3C.1/D018: solo AVAILABLE cuenta como "se evaluó de verdad" --
+    # UNAVAILABLE/NOT_APPLICABLE/PARTIAL/ERROR todos significan "no sabemos
+    # si hay dashboards" (ver scoring/rules.py, docstring de
+    # dashboards_signal_available). Sin sources_available (llamadas de test
+    # aisladas) se asume False -- nunca se afirma algo que no se verificó.
+    dashboards_signal_available = bool(sources_available) and (
+        sources_available.get("dashboards_used") == SignalAvailability.AVAILABLE
+    )
 
     for dataset in datasets:
         classification, explanation, excluded_from_savings = classify(
-            dataset, high_ingest_threshold, environment_partial_unknown_ratio, unavailable
+            dataset,
+            high_ingest_threshold,
+            environment_partial_unknown_ratio,
+            unavailable,
+            dashboards_signal_available=dashboards_signal_available,
         )
         dataset.classification = classification
         dataset.explanation = explanation

@@ -87,13 +87,26 @@ Interactive searches (30d): 0
 Interactive searches (90d): 0
 Scheduled searches: 0
 Alerts: 0
-Dashboards: 0
-Last observed: 83 days ago
+Dashboards: Not evaluated
+Last data observed: 83 days ago
 Classification: POSSIBLE WASTE
 
 This dataset appears as a candidate because it ingests 17.0 GB/day, has no
-interactive searches in the last 90 days, and was not found in alerts,
-dashboards, or scheduled saved searches.
+interactive searches in the last 90 days, and was not found in alerts or
+scheduled saved searches (dashboard usage was not evaluated in this run --
+see Methodology).
+```
+
+Nota (Fase 3C.1/D018): "Dashboards" solo muestra "Yes"/"No" cuando
+`dashboards_used` fue evaluado de verdad en este run (el usuario exportó
+`dashboards_used.csv`) -- de lo contrario muestra "Not evaluated" y la
+explicación del candidato NO afirma "no encontrado en dashboards" (eso
+sería una certeza falsa sobre una señal nunca consultada). Ver
+DECISIONS.md D018. Además, "Last observed" se renombró a "Last data
+observed": la señal viene de `metadata type=sourcetypes` (actividad de
+ingest/datos, `recentTime`), NUNCA de actividad de búsqueda interactiva --
+el nombre anterior podía leerse, junto a las columnas "Searches 30d/90d",
+como si también fuera sobre uso humano.
 
 Recommendation: Review ingestion/filtering policy.
 ```
