@@ -63,6 +63,22 @@ que funcione en macOS (Python puro, sin llamadas a `subprocess` ni paths
 específicos de SO) pero no fue probado ahí. No probado en Windows -- no
 asumas que funciona sin verificarlo vos mismo primero.
 
+## Try the demo
+
+Sin Splunk, sin credenciales y sin internet:
+
+```bash
+splunk-spend-auditor demo
+```
+
+Corre el pipeline real de análisis y reporte sobre un entorno Splunk
+**sintético** (datos ficticios y deterministas incluidos en el paquete: 9
+índices, 12 sourcetypes, ~267 GB/día, con candidatos de optimización
+visibles). No se conecta a Splunk ni a ninguna red. El reporte queda en
+`./demo-output/report.html` (y `report.md`); usá `--output-dir <ruta>` para
+cambiarlo. El demo no inventa cifras en dólares: muestra GB/día y % del
+ingest observado.
+
 ## Uso rápido (con los datos sintéticos incluidos)
 
 ```bash
@@ -141,7 +157,7 @@ src/splunk_spend_auditor/
     reports/            Generación de reportes HTML/Markdown (Jinja2)
     cli.py              CLI (Typer): `quickscan` y `audit`
 templates/              Plantillas Jinja2 de los reportes
-tests/                  Suite pytest (160 tests) -- incluye un test de
+tests/                  Suite pytest (182 tests) -- incluye un test de
                          integración end-to-end contra sample-data/case_mixed
 PROJECT_STATUS.md       Estado exacto del proyecto, para retomar sin perder contexto
 DECISIONS.md            Registro de decisiones de arquitectura/producto

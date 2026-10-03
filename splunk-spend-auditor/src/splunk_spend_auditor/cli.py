@@ -308,5 +308,54 @@ def audit(
         typer.echo(f"Report ({fmt}): {path}")
 
 
+@app.command()
+def demo(
+    output_dir: str = typer.Option("./demo-output", help="Where to write the demo report."),
+):
+    """Offline demo: a deterministic SYNTHETIC Splunk environment run through
+    the real analysis and reporting pipeline. No Splunk, credentials or
+    network needed."""
+
+    from splunk_spend_auditor.demo import DEMO_SOURCE_LABEL, build_demo_collection
+
+    typer.echo("Log Spend Auditor — Demo")
+    typer.echo("")
+    typer.echo("Loading synthetic Splunk environment...")
+    collection = build_demo_collection()
+    typer.echo("Analyzing ingestion...")
+    datasets, summary, savings = _run_pipeline(
+        collection, 90, annual_spend=None, cost_per_gb_day=None
+    )
+    typer.echo("Generating report...")
+    context = build_report_context(
+        datasets, summary, savings, tier="pro", source_label=DEMO_SOURCE_LABEL
+    )
+    written = render_report(context, output_dir, ["html", "md"])
+
+    counts = {c: sum(1 for d in datasets if d.classification == c) for c in Classification}
+    waste = counts[Classification.POSSIBLE_WASTE]
+    review = counts[Classification.REVIEW]
+    typer.echo("")
+    typer.echo("Analysis complete.")
+    typer.echo("")
+    typer.echo(f"Indexes analyzed:      {len({d.key.index for d in datasets})}")
+    typer.echo(f"Sourcetypes analyzed:  {len(datasets)}")
+    typer.echo(f"Daily ingest:          {format_gb_per_day(savings.current_ingest_gb_day)}/day")
+    typer.echo(
+        f"Findings detected:     {waste + review} "
+        f"({waste} possible waste, {review} review)"
+    )
+    typer.echo(
+        f"Optimization candidates: {format_gb_per_day(savings.candidate_gb_day)}/day "
+        f"({savings.potential_reduction_pct * 100:.1f}% of observed ingest)"
+    )
+    typer.echo("")
+    typer.echo("This demo uses synthetic data; nothing was read from or sent to Splunk.")
+    typer.echo("")
+    typer.echo("Report:")
+    typer.echo(str(written["html"]))
+    typer.echo(str(written["md"]))
+
+
 if __name__ == "__main__":
     app()

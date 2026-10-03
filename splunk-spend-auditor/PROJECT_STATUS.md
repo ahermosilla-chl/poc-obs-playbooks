@@ -1,6 +1,6 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 4B (Security & Adversarial Review)
+Última actualización: cierre de Fase 5A (Offline Demo)
 
 ## Estado actual
 
@@ -40,6 +40,18 @@ del entorno por defecto), un path traversal MEDIUM en la URL del
 preflight de D015, un envenenamiento numérico HIGH (`NaN`/`Infinity`/
 negativo en `gb` producía literalmente "nan KB/day" en el reporte), y un
 crash MEDIUM ante una fecha malformada. Ver sección "Fase 4B" abajo.
+
+## Fase 5A — Offline Demo (COMPLETADA)
+
+`splunk-spend-auditor demo [--output-dir ./demo-output]`: entorno Splunk
+sintético y determinista (`src/splunk_spend_auditor/demo.py`, 12 datasets,
+9 índices, ~267 GB/día, construido en memoria sin RNG/reloj) inyectado como
+`RawCollection` en el pipeline real (build_datasets -> classify_all ->
+compute_savings -> render). Sin red, credenciales ni archivos de entrada;
+solo escribe `report.html`/`report.md` en el directorio de salida. No inventa
+dólares (sin `--annual-spend`). Sin cambios al analizador, collectors ni
+seguridad. Tests: 182 passing (175 + 7 en `tests/test_demo.py`, incluido un
+test que bloquea sockets/DNS/collector REST).
 
 ## Fase 4B — Security & Adversarial Review (COMPLETADA)
 
