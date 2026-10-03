@@ -52,9 +52,12 @@ Linux `ubuntu-22.04` (x86_64), Windows `windows-2022` (x86_64), macOS
 `demo`, métricas esperadas) -> upload. Linux además corre el demo en un
 netns sin red. Reutiliza los scripts existentes. Fixes de portabilidad:
 `encoding="utf-8"` explícito al escribir reportes / leer queries y salida
-estándar tolerante en Windows. Estado: **configurado**; solo Linux x86_64
-verificado localmente. Windows y macOS arm64: NO verificados hasta que el
-run de Actions complete (ver informe de la fase).
+estándar tolerante en Windows. Estado: **verificado en CI nativo** -- run
+https://github.com/ahermosilla-chl/poc-obs-playbooks/actions/runs/37153917351
+(commit 958b6d2): Linux x86_64 (ubuntu-22.04), Windows AMD64 (windows-2022)
+y macOS arm64 (macos-14, Mach-O arm64) pasaron tests, build y smoke test del
+ejecutable empaquetado. Sin firmar/notarizar. Un bug real de portabilidad
+encontrado: los tests leían reportes UTF-8 con la codepage de Windows.
 
 **Nota de marca:** el nombre comercial público debe revisarse antes de
 publicar en una tienda; el nombre técnico `splunk-spend-auditor` se mantiene.

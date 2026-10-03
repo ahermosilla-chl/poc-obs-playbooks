@@ -139,8 +139,9 @@ conservadora, ver D013/D014/D015 en `DECISIONS.md`).
 
 ## Standalone distribution (distribución para usuarios finales)
 
-> **Estado:** el mecanismo de build existe y fue verificado solo en Linux
-> x86_64. **Todavía no hay binarios públicos** para ninguna plataforma.
+> **Estado:** el workflow de build nativo fue ejecutado y verificado en
+> Linux x86_64, Windows x86_64 y macOS arm64 (artifacts internos de GitHub
+> Actions, sin firmar). **Todavía no hay binarios públicos.**
 
 El objetivo es un ejecutable portable (sin Python, pip ni repositorio):
 `./splunk-spend-auditor demo` (Windows: `splunk-spend-auditor.exe demo`).
