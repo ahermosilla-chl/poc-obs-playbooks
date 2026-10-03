@@ -97,6 +97,17 @@ jobs:
           cat "dist/${{ steps.art.outputs.name }}.sha256"
           python -c "import os; print(os.path.getsize('dist/${{ steps.art.outputs.name }}'), 'bytes')"
 
+      - name: Annotate artifact facts (name, arch, size, SHA-256)
+        run: |
+          NAME="${{ steps.art.outputs.name }}"
+          SHA=$(cut -d' ' -f1 "dist/$NAME.sha256")
+          SIZE=$(python -c "import os; print(os.path.getsize('dist/$NAME'))")
+          ARCH=$(python -c "import platform; print(platform.machine())")
+          if [ "$RUNNER_OS" != "Windows" ]; then FILEINFO=$(file -b "dist/$NAME"); else FILEINFO="PE executable (runner machine $ARCH)"; fi
+          MSG="$NAME | runner arch: $ARCH | $FILEINFO | $SIZE bytes | sha256 $SHA"
+          echo "::notice title=artifact::$MSG"
+          echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.art.outputs.name }}
