@@ -14,7 +14,7 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "rele
 def text():
     if not WORKFLOW.exists():
         pytest.skip("workflow vive en la raíz del monorepo; no disponible aquí")
-    return WORKFLOW.read_text()
+    return WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_manual_trigger_only(text):

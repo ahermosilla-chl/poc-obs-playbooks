@@ -26,7 +26,7 @@ _COLLECTOR_FILES = [
 
 
 def _imported_module_names(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -51,7 +51,7 @@ def test_collectors_only_import_the_signal_availability_enum_from_models():
     de datos), pero no Classification (decidir una categoría de negocio)."""
 
     for path in _COLLECTOR_FILES:
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         assert "Classification" not in source, (
             f"{path.name} menciona 'Classification' -- eso es responsabilidad "
             "de scoring/rules.py, no del collector."

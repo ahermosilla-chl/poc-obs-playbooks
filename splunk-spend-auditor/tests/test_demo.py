@@ -57,7 +57,7 @@ def test_demo_cli_summary_numbers(no_network, tmp_path):
 
 def test_demo_report_contains_core_sections_and_findings(no_network, tmp_path):
     _run(tmp_path)
-    html = (tmp_path / "out" / "report.html").read_text()
+    html = (tmp_path / "out" / "report.html").read_text(encoding="utf-8")
     for section in (
         "Executive Summary",
         "Current Environment",
@@ -77,7 +77,7 @@ def test_demo_report_contains_core_sections_and_findings(no_network, tmp_path):
 
 def test_demo_never_invents_dollar_figures(no_network, tmp_path):
     _run(tmp_path)
-    text = (tmp_path / "out" / "report.md").read_text()
+    text = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
     assert "Not provided" in text
     assert "$" not in text
 
@@ -85,8 +85,8 @@ def test_demo_never_invents_dollar_figures(no_network, tmp_path):
 def test_demo_output_is_deterministic(no_network, tmp_path):
     runner.invoke(app, ["demo", "--output-dir", str(tmp_path / "a")])
     runner.invoke(app, ["demo", "--output-dir", str(tmp_path / "b")])
-    a = (tmp_path / "a" / "report.md").read_text().splitlines()
-    b = (tmp_path / "b" / "report.md").read_text().splitlines()
+    a = (tmp_path / "a" / "report.md").read_text(encoding="utf-8").splitlines()
+    b = (tmp_path / "b" / "report.md").read_text(encoding="utf-8").splitlines()
     strip = [i for i, line in enumerate(a) if "UTC" in line]
     assert [l for i, l in enumerate(a) if i not in strip] == [
         l for i, l in enumerate(b) if i not in strip

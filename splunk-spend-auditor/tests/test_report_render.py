@@ -65,7 +65,7 @@ def test_never_uses_guaranteed_saving_language():
     with tempfile.TemporaryDirectory() as tmp:
         written = render_report(context, tmp, ["html", "md"])
         for path in written.values():
-            text = path.read_text().lower()
+            text = path.read_text(encoding="utf-8").lower()
             assert "guaranteed saving" not in text
             assert "delete this data" not in text
             assert "potential saving" in text
@@ -255,7 +255,7 @@ class TestAnnualSpendProvenance:
         context = build_report_context(datasets, summary, savings, tier="pro")
         written = render_report(context, tmp_path, ["html", "md"])
         for path in written.values():
-            text = path.read_text().lower()
+            text = path.read_text(encoding="utf-8").lower()
             assert "user-provided" in text or "as provided for this audit" in text
 
     def test_no_spend_input_never_implies_user_provided_language(self, tmp_path):
@@ -266,7 +266,7 @@ class TestAnnualSpendProvenance:
         context = build_report_context(datasets, summary, savings_no_spend, tier="pro")
         written = render_report(context, tmp_path, ["html", "md"])
         for path in written.values():
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             assert "Not provided" in text or "Not provided" in text.title()
 
 
@@ -315,7 +315,7 @@ class TestLastSeenLabelDoesNotImplySearchActivity:
         context = build_report_context(datasets, summary, savings, tier="pro")
         written = render_report(context, tmp_path, ["html", "md"])
         for path in written.values():
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             if "days ago" in text or "Last" in text:
                 assert "Last data observed" in text
                 assert "Last observed" not in text
@@ -345,7 +345,7 @@ class TestSignalAvailableCounterExcludesNotApplicable:
         context = build_report_context(datasets, summary, savings, tier="pro")
         written = render_report(context, tmp_path, ["html", "md"])
         for path in written.values():
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             # El bug real: "6 of 6" -- ningún run con fuentes NOT_APPLICABLE
             # debe decir "X of Y" con Y igual al total crudo de fuentes.
             assert "4 of 6" not in text
@@ -367,7 +367,7 @@ class TestConfidenceColumnLabelIsUnambiguous:
         context = build_report_context(datasets, summary, savings, tier="pro")
         written = render_report(context, tmp_path, ["html", "md"])
         for path in written.values():
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             assert "Search evidence confidence" in text
 
     def test_classification_is_never_confused_with_a_bare_confidence_column(self):
@@ -397,7 +397,7 @@ class TestNoProductTierLabelInReport:
         context = build_report_context(datasets, summary, savings, tier="pro")
         written = render_report(context, tmp_path, ["html", "md"])
         for path in written.values():
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             assert "(PRO)" not in text
             assert "(FREE)" not in text
 
@@ -444,13 +444,13 @@ class TestHtmlReportEscapesUntrustedSplunkStrings:
 
     def test_html_report_never_contains_a_raw_script_tag(self, tmp_path):
         written = self._render_with_malicious_dataset(tmp_path)
-        html = written["html"].read_text()
+        html = written["html"].read_text(encoding="utf-8")
         assert "<script>alert" not in html
         assert "&lt;script&gt;alert" in html
 
     def test_html_report_never_contains_a_raw_event_handler_breakout(self, tmp_path):
         written = self._render_with_malicious_dataset(tmp_path)
-        html = written["html"].read_text()
+        html = written["html"].read_text(encoding="utf-8")
         # El breakout de atributo (cerrar el <code> con "> e inyectar un tag
         # nuevo) debe quedar neutralizado -- las comillas y los ángulos
         # deben estar escapados, no aparecer crudos formando un tag real.
@@ -459,7 +459,7 @@ class TestHtmlReportEscapesUntrustedSplunkStrings:
 
     def test_html_report_escapes_ampersand_and_quotes_in_explanation_text(self, tmp_path):
         written = self._render_with_malicious_dataset(tmp_path)
-        html = written["html"].read_text()
+        html = written["html"].read_text(encoding="utf-8")
         assert "&amp;" in html
         assert "&lt;" in html and "&gt;" in html
 

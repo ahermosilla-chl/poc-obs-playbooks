@@ -62,7 +62,7 @@ def test_cli_version_matches_single_source_of_truth():
     result = CliRunner().invoke(app, ["--version"])
     assert result.exit_code == 0
     assert result.output.strip() == f"splunk-spend-auditor {__version__}"
-    assert 'dynamic = ["version"]' in (ROOT / "pyproject.toml").read_text()
+    assert 'dynamic = ["version"]' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
 def test_build_script_artifact_naming():
