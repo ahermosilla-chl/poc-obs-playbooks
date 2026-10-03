@@ -353,11 +353,11 @@ def render_report(context: dict, output_dir: str | Path, formats: list[str]) -> 
     if "html" in formats:
         template = env.get_template("report.html.j2")
         path = output_dir / "report.html"
-        path.write_text(template.render(**context))
+        path.write_text(template.render(**context), encoding="utf-8")
         written["html"] = path
     if "md" in formats:
         template = env.get_template("report.md.j2")
         path = output_dir / "report.md"
-        path.write_text(template.render(**context))
+        path.write_text(template.render(**context), encoding="utf-8")
         written["md"] = path
     return written

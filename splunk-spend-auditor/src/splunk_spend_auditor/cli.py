@@ -52,7 +52,11 @@ def _main(
         help="Show the version and exit.",
     ),
 ):
-    pass
+    # Windows: stdout/stderr redirigidos usan la codepage local (p.ej. cp1252);
+    # nunca fallar por un caracter no representable en la salida.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
 
 
 def _configure_logging(verbose: bool) -> None:

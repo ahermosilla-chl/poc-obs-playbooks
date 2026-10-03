@@ -56,6 +56,9 @@ def sha256_of(path: Path) -> str:
 
 
 def main() -> None:
+    if "--print-artifact-name" in sys.argv:
+        print(artifact_name())
+        return
     name = artifact_name()
     sep = ";" if platform.system() == "Windows" else ":"
     work = ROOT / "build"

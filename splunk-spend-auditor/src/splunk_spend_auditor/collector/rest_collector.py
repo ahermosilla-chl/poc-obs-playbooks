@@ -353,7 +353,7 @@ def _run_oneshot_search(client: httpx.Client, spl: str) -> pd.DataFrame:
 
 
 def _load_query(queries_path: Path, filename: str) -> str:
-    text = (queries_path / filename).read_text()
+    text = (queries_path / filename).read_text(encoding="utf-8")
     # Las queries en queries/*.spl empiezan con un bloque de comentario
     # ``` ... ``` explicativo -- se descarta antes de ejecutar.
     if text.startswith("```"):

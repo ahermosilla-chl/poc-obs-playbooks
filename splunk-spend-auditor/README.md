@@ -153,6 +153,10 @@ make build            # o: python scripts/build.py
 python scripts/smoke_test.py dist/<artefacto>
 ```
 
+El workflow manual `.github/workflows/release-build.yml` (GitHub Actions,
+`workflow_dispatch`) construye y prueba cada plataforma en un runner nativo
+y sube los binarios como *artifacts* internos (no publica nada).
+
 Genera `dist/splunk-spend-auditor-<version>-<os>-<arch>[.exe]` más su
 `.sha256` (`dist/` está en `.gitignore`). Plataformas previstas:
 `linux-x86_64`, `macos-arm64`, `windows-x86_64.exe`. La instalación con
@@ -179,7 +183,7 @@ src/splunk_spend_auditor/
     reports/            Generación de reportes HTML/Markdown (Jinja2)
     cli.py              CLI (Typer): `quickscan` y `audit`
 src/.../templates/      Plantillas Jinja2 de los reportes
-tests/                  Suite pytest (188 tests) -- incluye un test de
+tests/                  Suite pytest (192 tests) -- incluye un test de
                          integración end-to-end contra sample-data/case_mixed
 PROJECT_STATUS.md       Estado exacto del proyecto, para retomar sin perder contexto
 DECISIONS.md            Registro de decisiones de arquitectura/producto

@@ -61,7 +61,7 @@ def _read_protected_overrides(path: Path) -> set[tuple[str, str]]:
     overrides: set[tuple[str, str]] = set()
     if not path.exists():
         return overrides
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue

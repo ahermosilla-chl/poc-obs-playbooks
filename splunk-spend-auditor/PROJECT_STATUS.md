@@ -1,6 +1,6 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 5B (Standalone Packaging)
+Última actualización: Fase 5B.1 (Cross-Platform Release Builds)
 
 ## Estado actual
 
@@ -40,6 +40,24 @@ del entorno por defecto), un path traversal MEDIUM en la URL del
 preflight de D015, un envenenamiento numérico HIGH (`NaN`/`Infinity`/
 negativo en `gb` producía literalmente "nan KB/day" en el reporte), y un
 crash MEDIUM ante una fecha malformada. Ver sección "Fase 4B" abajo.
+
+## Fase 5B.1 — Cross-Platform Release Builds
+
+Workflow `.github/workflows/release-build.yml` (solo `workflow_dispatch`,
+sin secretos, sin releases/publicación; artifacts de Actions, 14 días):
+Linux `ubuntu-22.04` (x86_64), Windows `windows-2022` (x86_64), macOS
+`macos-14` (Apple Silicon; el job falla si `platform.machine()` no es
+`arm64`). Cada job: tests -> `scripts/build.py` -> `scripts/smoke_test.py`
+(copia el binario fuera del repo, verifica SHA-256, `--version`, `--help`,
+`demo`, métricas esperadas) -> upload. Linux además corre el demo en un
+netns sin red. Reutiliza los scripts existentes. Fixes de portabilidad:
+`encoding="utf-8"` explícito al escribir reportes / leer queries y salida
+estándar tolerante en Windows. Estado: **configurado**; solo Linux x86_64
+verificado localmente. Windows y macOS arm64: NO verificados hasta que el
+run de Actions complete (ver informe de la fase).
+
+**Nota de marca:** el nombre comercial público debe revisarse antes de
+publicar en una tienda; el nombre técnico `splunk-spend-auditor` se mantiene.
 
 ## Fase 5B — Standalone Packaging (COMPLETADA)
 
