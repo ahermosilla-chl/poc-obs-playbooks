@@ -41,6 +41,16 @@ preflight de D015, un envenenamiento numérico HIGH (`NaN`/`Infinity`/
 negativo en `gb` producía literalmente "nan KB/day" en el reporte), y un
 crash MEDIUM ante una fecha malformada. Ver sección "Fase 4B" abajo.
 
+## Fase 5C — Community vs Pro (COMPLETADA)
+
+`entitlements.py` (Edition/Capability/Entitlement, único punto de decisión);
+`resolve_entitlement()` devuelve Community hasta que la Fase 5D conecte
+licencias. Community: demo completo + quickscan real con totales agregados y
+vista previa de 3 candidatos. Pro: `audit` completo (falla con exit code 3 y
+antes de recolectar en Community) y quickscan con detalle completo. Sin
+flags/env/archivo que cambien la edición; los tests inyectan Pro parcheando
+`cli.resolve_entitlement`. Sin cambios de análisis/scoring. Tests: 215.
+
 ## Fase 5B.2 — Report Clarity Fix
 
 Solo presentación (sin cambios de análisis/scoring): tabla con volumen REVIEW

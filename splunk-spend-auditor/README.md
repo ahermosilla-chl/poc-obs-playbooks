@@ -79,18 +79,41 @@ visibles). No se conecta a Splunk ni a ninguna red. El reporte queda en
 cambiarlo. El demo no inventa cifras en dólares: muestra GB/día y % del
 ingest observado.
 
+## Ediciones: Community y Pro
+
+*Community descubre el problema; Pro lo explica.* Hoy toda ejecución es
+**Log Spend Auditor Community**. Pro (la auditoría completa que ya existe)
+todavía **no se puede activar ni comprar**: la activación llega en una fase
+posterior. No hay precios ni licencias en esta versión.
+
+| Capacidad | Community | Pro |
+|---|---|---|
+| Demo sintético completo (`demo`) | ✓ | ✓ |
+| Quickscan sobre Splunk real (REST o CSV) | ✓ | ✓ |
+| Totales de oportunidad (candidatos directos / en revisión, volumen ponderado, % del ingest) | ✓ | ✓ |
+| Vista previa de hasta 3 candidatos (dataset, GB/día, clasificación) | ✓ | ✓ |
+| Quickscan con detalle completo en terminal (top consumidores, listas completas) | — | ✓ |
+| `audit`: inventario completo, evidencia de uso, Data Value Score, recomendaciones, riesgos y metodología | — | ✓ |
+| Reportes HTML y Markdown completos de un entorno real | — | ✓ |
+
+En Community, `audit` falla de inmediato (antes de conectarse a Splunk) con el
+mensaje "Log Spend Auditor Pro required" y **código de salida 3**; el
+resto de los códigos: `1` error operacional, `2` uso incorrecto.
+
 ## Uso rápido (con los datos sintéticos incluidos)
 
 ```bash
-# Versión gratuita, resumen en terminal (no escribe ningún archivo)
+# Community: resumen en terminal (no escribe ningún archivo)
 splunk-spend-auditor quickscan --from-csv sample-data/case_mixed
 
-# Auditoría completa con reporte HTML + Markdown
+# Pro (aún no activable): auditoría completa con reporte HTML + Markdown
 splunk-spend-auditor audit --from-csv sample-data/case_mixed \
     --output-dir ./output --annual-spend 94200
 ```
 
-Esto genera `output/report.html` y `output/report.md` — ábrelos para ver el
+El reporte completo que produce `audit` es el mismo que ves en `demo`.
+
+Con Pro, esto genera `output/report.html` y `output/report.md` — ábrelos para ver el
 formato completo del informe (Executive Summary, desglose de ingest,
 candidatos de optimización con explicación, ahorro potencial, riesgos y
 metodología). Es el **único** lugar donde la herramienta escribe algo a
@@ -109,7 +132,7 @@ infirió (ver `docs/controlled-validation.md`).
 1. Corre las queries de `src/splunk_spend_auditor/queries/*.spl` en Splunk Search.
 2. Exporta cada resultado a CSV con el nombre esperado (ver
    `sample-data/schema/` para el esquema exacto de cada archivo).
-3. Corre `splunk-spend-auditor audit --from-csv <tu-directorio>`.
+3. Corre `splunk-spend-auditor quickscan --from-csv <tu-directorio>` (Community) o `audit --from-csv <tu-directorio>` (Pro).
 
 Ninguna credencial de Splunk es necesaria en este flujo — nunca compartes
 acceso a tu instancia con esta herramienta.
@@ -184,7 +207,7 @@ src/splunk_spend_auditor/
     reports/            Generación de reportes HTML/Markdown (Jinja2)
     cli.py              CLI (Typer): `quickscan` y `audit`
 src/.../templates/      Plantillas Jinja2 de los reportes
-tests/                  Suite pytest (200 tests) -- incluye un test de
+tests/                  Suite pytest (215 tests) -- incluye un test de
                          integración end-to-end contra sample-data/case_mixed
 PROJECT_STATUS.md       Estado exacto del proyecto, para retomar sin perder contexto
 DECISIONS.md            Registro de decisiones de arquitectura/producto

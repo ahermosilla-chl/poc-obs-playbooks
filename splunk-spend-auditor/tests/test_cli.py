@@ -55,6 +55,15 @@ def _mixed_waste_and_review_collection() -> RawCollection:
     )
 
 
+@pytest.fixture
+def pro(monkeypatch):
+    """Inyecta Pro en el borde de la app (no existe bypass para el usuario)."""
+    from splunk_spend_auditor.entitlements import PRO
+
+    monkeypatch.setattr("splunk_spend_auditor.cli.resolve_entitlement", lambda: PRO)
+
+
+@pytest.mark.usefixtures("pro")
 class TestQuickscanDoesNotMixWasteAndReview:
     def test_possible_waste_and_review_are_reported_separately(self, tmp_path, monkeypatch):
         collection = _mixed_waste_and_review_collection()
@@ -99,6 +108,7 @@ class TestQuickscanDoesNotMixWasteAndReview:
         assert pct_text in result.output
 
 
+@pytest.mark.usefixtures("pro")
 class TestQuickscanCTAReflectsActualSource:
     def test_csv_mode_cta_suggests_from_csv(self, tmp_path, monkeypatch):
         collection = _mixed_waste_and_review_collection()

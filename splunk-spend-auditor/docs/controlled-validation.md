@@ -81,7 +81,11 @@ otherwise untrusted certificate (a lab/internal instance, for example) —
 TLS verification is on by default and should stay on against anything
 else.
 
-## Full audit (generates the HTML/Markdown report)
+## Full audit (generates the HTML/Markdown report) — Pro
+
+> Full `audit` is a Log Spend Auditor Pro capability and cannot be activated yet
+> (activation arrives in a later phase); on Community it exits with code 3
+> before contacting Splunk. Testers should use `quickscan` and `demo`.
 
 ```bash
 splunk-spend-auditor audit --host <your-splunk-host> --port 8089 \

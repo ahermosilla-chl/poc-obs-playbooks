@@ -22,6 +22,7 @@ from splunk_spend_auditor.analysis.build_datasets import build_datasets
 from splunk_spend_auditor.collector.csv_collector import RawCollection, load_from_directory
 from splunk_spend_auditor.collector.rest_collector import RestCollectionError, RestConfig
 from splunk_spend_auditor.collector.rest_collector import collect as collect_rest
+from splunk_spend_auditor.entitlements import Capability, resolve_entitlement
 from splunk_spend_auditor.formatting import format_gb_per_day
 from splunk_spend_auditor.models import Classification
 from splunk_spend_auditor.reports.render import build_report_context, render_report
@@ -34,6 +35,27 @@ app = typer.Typer(
     help="Read-only, local-first audit of Splunk ingest cost vs. real usage.",
 )
 
+
+
+# Código de salida documentado cuando una capacidad requiere Pro
+# (distinto de 1 = error operacional y 2 = uso incorrecto de Typer).
+EXIT_PRO_REQUIRED = 3
+
+_PRO_REQUIRED_MESSAGE = """\
+Log Spend Auditor Pro required
+
+Community includes real-environment Quickscan.
+
+Pro unlocks:
+  • complete dataset analysis
+  • evidence and usage signals
+  • detailed recommendations
+  • HTML and Markdown audit reports
+
+Run:
+  splunk-spend-auditor quickscan
+
+to analyze your environment with Community."""
 
 
 def _version_callback(value: bool) -> None:
@@ -178,6 +200,60 @@ def _echo_degradation_notice(summary) -> None:
             typer.secho(f"  - {source}: {reason}", fg=typer.colors.YELLOW)
 
 
+_PREVIEW_SIZE = 3
+
+
+def _echo_community_quickscan(datasets, summary, savings) -> None:
+    """Quickscan de Community: totales agregados reales + vista previa de los
+    candidatos de mayor impacto. No muestra inventario ni evidencia."""
+
+    waste = [d for d in datasets if d.classification == Classification.POSSIBLE_WASTE]
+    review = [d for d in datasets if d.classification == Classification.REVIEW]
+
+    def impact(d) -> float:
+        if d.classification == Classification.POSSIBLE_WASTE:
+            return d.ingest_gb_per_day
+        return 0.0 if d.excluded_from_savings_estimate else REVIEW_WEIGHT * d.ingest_gb_per_day
+
+    preview = sorted((d for d in waste + review if impact(d) > 0), key=impact, reverse=True)
+    preview = preview[:_PREVIEW_SIZE]
+
+    typer.echo("Log Spend Auditor Community — Quickscan")
+    typer.echo("")
+    typer.echo(f"Total ingest:         {format_gb_per_day(savings.current_ingest_gb_day)}/day")
+    typer.echo(
+        f"Datasets analyzed:    {len(datasets)} across {len({d.key.index for d in datasets})} indexes"
+    )
+    typer.echo("")
+    # "Detectadas" = hay volumen real que contribuye al estimado ponderado
+    # (datasets con 0 GB/día no cuentan como oportunidad).
+    if savings.candidate_gb_day > 0:
+        typer.echo("Optimization opportunities detected.")
+        typer.echo("")
+        typer.echo("Community identified:")
+        typer.echo(f"  Direct candidates:       {len(waste)}")
+        typer.echo(f"  Review candidates:       {len(review)}")
+        typer.echo(f"  Weighted opportunity:    {format_gb_per_day(savings.candidate_gb_day)}/day")
+        typer.echo(
+            f"  Potential reduction:     {savings.potential_reduction_pct * 100:.1f}% of observed ingest"
+        )
+        if preview:
+            typer.echo("")
+            typer.echo(f"Top candidates (preview of up to {_PREVIEW_SIZE}):")
+            for d in preview:
+                typer.echo(
+                    f"  {d.key}  {d.classification.value}  {format_gb_per_day(d.ingest_gb_per_day)}/day"
+                )
+        typer.echo("")
+        typer.echo("Pro provides the complete evidence, dataset breakdown and recommendations.")
+    else:
+        typer.echo("No optimization opportunities were detected with the current thresholds.")
+        typer.echo("")
+        typer.echo("Detailed auditing is available in Log Spend Auditor Pro.")
+    typer.echo("")
+    _echo_degradation_notice(summary)
+
+
 @app.command()
 def quickscan(
     from_csv: Optional[str] = typer.Option(
@@ -192,9 +268,10 @@ def quickscan(
     lookback_days: int = typer.Option(90, help="Lookback window in days."),
     verbose: bool = typer.Option(False, "--verbose", help="Show technical error detail."),
 ):
-    """Free, no-signup version: terminal summary only (docs/validation-plan.md).
-    Top 5 consumers + top 3 optimization candidates, no HTML report."""
+    """Terminal summary, no report files. Community: aggregate opportunity
+    totals plus a preview of up to 3 candidates. Pro: full terminal detail."""
 
+    entitlement = resolve_entitlement()
     _configure_logging(verbose)
     collection = _collect_from_source(
         from_csv=from_csv, host=host, port=port, verify_ssl=verify_ssl, queries_dir=queries_dir
@@ -202,6 +279,10 @@ def quickscan(
     datasets, summary, savings = _run_pipeline(
         collection, lookback_days, annual_spend=None, cost_per_gb_day=None
     )
+
+    if not entitlement.allows(Capability.FULL_QUICKSCAN):
+        _echo_community_quickscan(datasets, summary, savings)
+        return
 
     top5 = sorted(datasets, key=lambda d: d.ingest_gb_per_day, reverse=True)[:5]
     # Fase 3C.2 (D019): antes se mezclaban POSSIBLE_WASTE y REVIEW en una
@@ -296,7 +377,14 @@ def audit(
     ),
     verbose: bool = typer.Option(False, "--verbose", help="Show technical error detail."),
 ):
-    """Full audit: classification + potential savings + HTML/Markdown report."""
+    """Full audit: classification + potential savings + HTML/Markdown report.
+    Requires Log Spend Auditor Pro (exit code 3 on Community)."""
+
+    # Falla ANTES de cualquier recolección o petición de token.
+    entitlement = resolve_entitlement()
+    if not (entitlement.allows(Capability.FULL_AUDIT) and entitlement.allows(Capability.FULL_REPORT)):
+        typer.echo(_PRO_REQUIRED_MESSAGE, err=True)
+        raise typer.Exit(code=EXIT_PRO_REQUIRED)
 
     _configure_logging(verbose)
     collection = _collect_from_source(
