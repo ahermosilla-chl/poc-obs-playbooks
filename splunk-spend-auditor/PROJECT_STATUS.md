@@ -41,6 +41,16 @@ preflight de D015, un envenenamiento numérico HIGH (`NaN`/`Infinity`/
 negativo en `gb` producía literalmente "nan KB/day" en el reporte), y un
 crash MEDIUM ante una fecha malformada. Ver sección "Fase 4B" abajo.
 
+## Fase 5B.2 — Report Clarity Fix
+
+Solo presentación (sin cambios de análisis/scoring): tabla con volumen REVIEW
+crudo, contribución ponderada (x0.5) y estimado ponderado (más una fila de
+REVIEW excluido por señales faltantes cuando existe); Executive Summary
+separa candidatos directos, revisión manual y estimado ponderado; Data Value
+Score explicado (0-100, pesos de `scoring/rules.py`); sin gasto se usa
+"Potential Optimization" (con gasto se conserva "Potential Savings"). Tests:
+200 passing.
+
 ## Fase 5B.1 — Cross-Platform Release Builds
 
 Workflow `.github/workflows/release-build.yml` (solo `workflow_dispatch`,

@@ -184,7 +184,7 @@ src/splunk_spend_auditor/
     reports/            Generación de reportes HTML/Markdown (Jinja2)
     cli.py              CLI (Typer): `quickscan` y `audit`
 src/.../templates/      Plantillas Jinja2 de los reportes
-tests/                  Suite pytest (192 tests) -- incluye un test de
+tests/                  Suite pytest (200 tests) -- incluye un test de
                          integración end-to-end contra sample-data/case_mixed
 PROJECT_STATUS.md       Estado exacto del proyecto, para retomar sin perder contexto
 DECISIONS.md            Registro de decisiones de arquitectura/producto

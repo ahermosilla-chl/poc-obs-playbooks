@@ -292,6 +292,18 @@ def build_report_context(
         "review_gb_day": format_gb_per_day(savings.review_gb_day),
         "candidate_gb_day": format_gb_per_day(savings.candidate_gb_day),
     }
+    # Fase 5B.2: aritmética explícita. `review_gb_day` es el volumen REVIEW
+    # crudo; la contribución ponderada es lo que realmente suma a
+    # `candidate_gb_day` (candidate - possible_waste = REVIEW_WEIGHT x volumen
+    # REVIEW elegible). Un REVIEW excluido por D015 (señal faltante) cuenta en
+    # el crudo pero NO en la contribución -- se muestra aparte, no se oculta.
+    review_weighted_gb_day = max(savings.candidate_gb_day - savings.possible_waste_gb_day, 0.0)
+    review_excluded_gb_day = max(
+        savings.review_gb_day - review_weighted_gb_day / REVIEW_WEIGHT, 0.0
+    )
+    savings_display["review_weighted_gb_day"] = format_gb_per_day(review_weighted_gb_day)
+    savings_display["review_excluded_gb_day"] = format_gb_per_day(review_excluded_gb_day)
+    has_review_excluded = review_excluded_gb_day > 1e-6
 
     context = {
         "tool_version": __version__,
@@ -319,6 +331,8 @@ def build_report_context(
         "savings": savings_dict,
         "savings_display": savings_display,
         "review_weight": REVIEW_WEIGHT,
+        "has_review_excluded": has_review_excluded,
+        "has_financial_estimate": savings.potential_annual_saving is not None,
         "high_ingest_threshold_gb": round(high_ingest_threshold, 2),
         "high_ingest_threshold_display": format_gb_per_day(high_ingest_threshold),
         "partial_or_unknown_ratio": summary.partial_or_unknown_ratio,

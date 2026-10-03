@@ -64,7 +64,7 @@ def test_demo_report_contains_core_sections_and_findings(no_network, tmp_path):
         "Ingestion Breakdown",
         "Top Optimization Candidates",
         "Protected / High Value",
-        "Potential Savings",
+        "Potential Optimization",
         "Risk Considerations",
         "Methodology",
     ):

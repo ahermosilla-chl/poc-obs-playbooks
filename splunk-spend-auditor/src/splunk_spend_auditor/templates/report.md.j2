@@ -7,15 +7,24 @@ _Generated {{ generated_at }} — Log Spend Auditor v{{ tool_version }}_
 Your Splunk environment ingests **{{ current_ingest_display }}/day** across
 {{ total_datasets }} (index, sourcetype) datasets.
 
-Of that, **{{ savings_display.candidate_gb_day }}/day**
-({{ (savings.potential_reduction_pct * 100) | round(1) }}%) are flagged as
-optimization candidates with low or no observed usage.
+The audit identified **{{ savings_display.possible_waste_gb_day }}/day** of direct
+optimization candidates (possible waste) and **{{ savings_display.review_gb_day }}/day**
+of datasets requiring manual review.
+
+Using the report's conservative weighting model (review volume counted at
+×{{ review_weight }}), this represents **{{ savings_display.candidate_gb_day }}/day**
+({{ (savings.potential_reduction_pct * 100) | round(1) }}% of observed ingest) of
+potential optimization opportunity.
 
 {% if savings.potential_annual_saving is not none %}
 Based on {% if savings.annual_spend_input is not none %}an annual Splunk spend of **${{ "{:,.0f}".format(savings.annual_spend_input) }}** *(as provided for this audit, not measured or inferred by this tool)*{% else %}the cost-per-GB/day provided{% endif %}, this represents a **potential annual saving of around ${{ "{:,.0f}".format(savings.potential_annual_saving) }}**.
 {% endif %}
 
+{% if has_financial_estimate %}
 _This is a potential saving, not a guaranteed one — see "Risk Considerations"._
+{% else %}
+_This is an estimate of potentially optimizable ingest, not a guaranteed reduction — see "Risk Considerations"._
+{% endif %}
 
 {{ counts_summary_line }}
 
@@ -115,23 +124,39 @@ No datasets were classified as protected or high value in this run.
 {% for row in all_datasets_detail %}
 | `{{ row.name }}` | {{ row.gb_per_day_display }} | {{ row.classification }} | {{ row.score }} |
 {% endfor %}
+
+**Data Value Score** (0–100) is a rule-based sum of observed usage evidence:
+interactive searches in the last 30 days (up to 30 points), a scheduled search
+(+25), an alert action (+20), dashboard use (+15) and distinct users (+5 for
+1–2, +10 for 3+), capped at 100. It orders datasets within a category; it does
+not decide the classification, is not a financial measure, and signals that
+were not evaluated in this run contribute nothing.
 {% endif %}
 
-## Potential Savings
+## {{ "Potential Savings" if has_financial_estimate else "Potential Optimization" }}
 
 | Metric | Value |
 |---|---|
 | Current ingest | {{ savings_display.current_ingest_gb_day }}/day |
 | Possible waste | {{ savings_display.possible_waste_gb_day }}/day |
-| Review candidates (weighted ×{{ review_weight }}) | {{ savings_display.review_gb_day }}/day |
-| Total optimization candidate volume | {{ savings_display.candidate_gb_day }}/day |
+| Review candidates — raw volume | {{ savings_display.review_gb_day }}/day |
+{% if has_review_excluded %}
+| Review volume excluded (missing signals) | {{ savings_display.review_excluded_gb_day }}/day |
+{% endif %}
+| Weighted review contribution (×{{ review_weight }}) | {{ savings_display.review_weighted_gb_day }}/day |
+| Weighted optimization estimate | {{ savings_display.candidate_gb_day }}/day |
 | Potential reduction | {{ (savings.potential_reduction_pct * 100) | round(1) }}% |
 {% if savings.potential_annual_saving is not none %}
 | Potential annual saving | ${{ "{:,.0f}".format(savings.potential_annual_saving) }} |
 {% endif %}
 
+{% if has_financial_estimate %}
 _This is a potential saving estimate, not a promise of savings — see the
 assumptions in "Methodology" below._
+{% else %}
+_This is an optimization estimate in volume terms; no spend input was provided,
+so no monetary figure is given — see the assumptions in "Methodology" below._
+{% endif %}
 
 ## Risk Considerations
 
@@ -145,7 +170,7 @@ search/alert/dashboard activity), **not a financial audit**.
 Datasets classified as `PROTECTED` were deliberately excluded from
 optimization candidates, regardless of their usage signals.
 
-Datasets classified as `UNKNOWN` are excluded from the savings calculation —
+Datasets classified as `UNKNOWN` are excluded from the estimate —
 we could not determine their usage with high confidence, so we do not guess.
 
 {% if show_squashing_note %}

@@ -48,9 +48,14 @@
 <div class="summary-box">
   <p>Your Splunk environment ingests <strong>{{ current_ingest_display }}/day</strong>
      across {{ total_datasets }} (index, sourcetype) datasets.</p>
-  <p>Of that, <strong>{{ savings_display.candidate_gb_day }}/day</strong>
-     ({{ (savings.potential_reduction_pct * 100) | round(1) }}%) are flagged as
-     optimization candidates with low or no observed usage.</p>
+  <p>The audit identified <strong>{{ savings_display.possible_waste_gb_day }}/day</strong>
+     of direct optimization candidates (possible waste) and
+     <strong>{{ savings_display.review_gb_day }}/day</strong> of datasets requiring manual review.</p>
+  <p>Using the report's conservative weighting model (review volume counted at
+     &times;{{ review_weight }}), this represents
+     <strong>{{ savings_display.candidate_gb_day }}/day</strong>
+     ({{ (savings.potential_reduction_pct * 100) | round(1) }}% of observed ingest) of
+     potential optimization opportunity.</p>
   {% if savings.potential_annual_saving is not none %}
   <p>Based on
      {% if savings.annual_spend_input is not none %}
@@ -62,7 +67,11 @@
      this represents a <strong>potential annual saving of around
      ${{ "{:,.0f}".format(savings.potential_annual_saving) }}</strong>.</p>
   {% endif %}
+  {% if has_financial_estimate %}
   <p><em>This is a potential saving, not a guaranteed one — see "Risk Considerations" below.</em></p>
+  {% else %}
+  <p><em>This is an estimate of potentially optimizable ingest, not a guaranteed reduction — see "Risk Considerations" below.</em></p>
+  {% endif %}
   <p class="candidate-meta">{{ counts_summary_line }}</p>
 </div>
 
@@ -189,21 +198,33 @@
   </tr>
   {% endfor %}
 </table>
+<p class="footer-note"><strong>Data Value Score</strong> (0&ndash;100) is a rule-based sum of observed
+   usage evidence: interactive searches in the last 30 days (up to 30 points), a scheduled search
+   (+25), an alert action (+20), dashboard use (+15) and distinct users (+5 for 1&ndash;2, +10 for 3+),
+   capped at 100. It orders datasets within a category; it does not decide the classification, is not a
+   financial measure, and signals that were not evaluated in this run contribute nothing.</p>
 {% endif %}
 
-<h2>Potential Savings</h2>
+<h2>{{ "Potential Savings" if has_financial_estimate else "Potential Optimization" }}</h2>
 <table>
   <tr><th>Current ingest</th><td>{{ savings_display.current_ingest_gb_day }}/day</td></tr>
   <tr><th>Possible waste</th><td>{{ savings_display.possible_waste_gb_day }}/day</td></tr>
-  <tr><th>Review candidates (weighted ×{{ review_weight }})</th><td>{{ savings_display.review_gb_day }}/day</td></tr>
-  <tr><th>Total optimization candidate volume</th><td>{{ savings_display.candidate_gb_day }}/day</td></tr>
+  <tr><th>Review candidates &mdash; raw volume</th><td>{{ savings_display.review_gb_day }}/day</td></tr>
+  {% if has_review_excluded %}
+  <tr><th>Review volume excluded (missing signals)</th><td>{{ savings_display.review_excluded_gb_day }}/day</td></tr>
+  {% endif %}
+  <tr><th>Weighted review contribution (&times;{{ review_weight }})</th><td>{{ savings_display.review_weighted_gb_day }}/day</td></tr>
+  <tr><th>Weighted optimization estimate</th><td>{{ savings_display.candidate_gb_day }}/day</td></tr>
   <tr><th>Potential reduction</th><td>{{ (savings.potential_reduction_pct * 100) | round(1) }}%</td></tr>
   {% if savings.potential_annual_saving is not none %}
   <tr><th>Potential annual saving</th><td>${{ "{:,.0f}".format(savings.potential_annual_saving) }}</td></tr>
   {% endif %}
 </table>
-<p class="footer-note">This is a potential saving estimate, not a promise of
-   savings — see the assumptions in "Methodology" below.</p>
+<p class="footer-note">
+   {% if has_financial_estimate %}This is a potential saving estimate, not a promise of
+   savings{% else %}This is an optimization estimate in volume terms; no spend input was
+   provided, so no monetary figure is given{% endif %} — see the assumptions in
+   "Methodology" below.</p>
 
 <h2>Risk Considerations</h2>
 <div class="risk-box">
@@ -216,7 +237,7 @@
      were deliberately excluded from optimization candidates, regardless of
      their usage signals.</p>
   <p>Datasets classified as <span class="badge badge-UNKNOWN">UNKNOWN</span>
-     are excluded from the savings calculation — we could not determine
+     are excluded from the estimate — we could not determine
      their usage with high confidence, so we do not guess.</p>
   {% if show_squashing_note %}
   <p>This report analyzes usage at the (index, sourcetype) level only. Splunk's
