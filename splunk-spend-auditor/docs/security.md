@@ -49,7 +49,7 @@
   hardcodearlo en scripts que suba a git.
 - **Amenaza: una query mal construida contra `_audit`/`_internal` genera
   carga excesiva en el search head del cliente.** Mitigación: todas las
-  queries en `queries/` acotan explícitamente `earliest=`/`latest=` (por
+  queries en `src/splunk_spend_auditor/queries/` acotan explícitamente `earliest=`/`latest=` (por
   defecto 30-90 días) y usan `stats`/`tstats` en vez de traer eventos crudos
   donde es posible.
 - **Amenaza: falso positivo de "possible waste" sobre un dataset de

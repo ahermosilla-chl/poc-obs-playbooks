@@ -2,7 +2,7 @@
 
 Formatos generados: `report.html` (para enviar a manager/FinOps/Splunk admin) y
 `report.md` (para pegar en un ticket/wiki). Ambos se generan desde el mismo
-contexto de datos vía Jinja2 (ver `templates/`).
+contexto de datos vía Jinja2 (ver `src/splunk_spend_auditor/templates/`).
 
 ## Secciones (en orden)
 

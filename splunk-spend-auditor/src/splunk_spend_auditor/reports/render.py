@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
@@ -32,7 +33,9 @@ _DEGRADED_SIGNAL_STATES = frozenset(
     {SignalAvailability.UNAVAILABLE, SignalAvailability.PARTIAL, SignalAvailability.ERROR}
 )
 
-_TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "templates"
+# Fase 5B: plantillas empaquetadas dentro del paquete (importlib.resources),
+# no relativas al repositorio -- funcionan instalado y desde el ejecutable.
+_TEMPLATES_DIR = Path(str(resources.files("splunk_spend_auditor") / "templates"))
 
 
 _RECOMMENDATION_TEXT = {

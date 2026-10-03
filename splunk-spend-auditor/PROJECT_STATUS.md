@@ -1,6 +1,6 @@
 # PROJECT_STATUS.md
 
-Última actualización: cierre de Fase 5A (Offline Demo)
+Última actualización: cierre de Fase 5B (Standalone Packaging)
 
 ## Estado actual
 
@@ -40,6 +40,18 @@ del entorno por defecto), un path traversal MEDIUM en la URL del
 preflight de D015, un envenenamiento numérico HIGH (`NaN`/`Infinity`/
 negativo en `gb` producía literalmente "nan KB/day" en el reporte), y un
 crash MEDIUM ante una fecha malformada. Ver sección "Fase 4B" abajo.
+
+## Fase 5B — Standalone Packaging (COMPLETADA)
+
+Plantillas y queries SPL movidas DENTRO del paquete
+(`src/splunk_spend_auditor/{templates,queries}`, `importlib.resources`,
+package-data en `pyproject.toml`); antes dependían del layout del repo y del
+cwd (`--queries-dir` ahora es solo un override opcional). Versión única en
+`__init__.py` (pyproject la lee dinámicamente) y `--version`. Build con
+PyInstaller `--onefile` (`make build` / `scripts/build.py`), smoke test en
+`scripts/smoke_test.py`, nombres `splunk-spend-auditor-<version>-<os>-<arch>`
++ `.sha256`. Verificado SOLO en Linux x86_64; Windows y macOS: configuración
+preparada, no ejecutada. Tests: 188 passing.
 
 ## Fase 5A — Offline Demo (COMPLETADA)
 

@@ -17,6 +17,7 @@ from typing import Optional
 
 import typer
 
+from splunk_spend_auditor import __version__
 from splunk_spend_auditor.analysis.build_datasets import build_datasets
 from splunk_spend_auditor.collector.csv_collector import RawCollection, load_from_directory
 from splunk_spend_auditor.collector.rest_collector import RestCollectionError, RestConfig
@@ -33,7 +34,25 @@ app = typer.Typer(
     help="Read-only, local-first audit of Splunk ingest cost vs. real usage.",
 )
 
-_QUERIES_DIR_DEFAULT = "queries"
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"splunk-spend-auditor {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the version and exit.",
+    ),
+):
+    pass
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -68,7 +87,7 @@ def _collect_from_source(
     host: Optional[str],
     port: int,
     verify_ssl: bool,
-    queries_dir: str,
+    queries_dir: Optional[str],
 ) -> RawCollection:
     """Decides which collector to use based on the flags -- see
     DECISIONS.md D002. Exactly one of --from-csv / --host must be given; the
@@ -165,7 +184,7 @@ def quickscan(
     ),
     port: int = typer.Option(8089, help="Splunk management port (REST mode)."),
     verify_ssl: bool = typer.Option(True, help="Verify TLS certificate (REST mode)."),
-    queries_dir: str = typer.Option(_QUERIES_DIR_DEFAULT, help="Directory with queries/*.spl (REST mode)."),
+    queries_dir: Optional[str] = typer.Option(None, help="Override the bundled SPL queries with a custom directory (REST mode)."),
     lookback_days: int = typer.Option(90, help="Lookback window in days."),
     verbose: bool = typer.Option(False, "--verbose", help="Show technical error detail."),
 ):
@@ -256,7 +275,7 @@ def audit(
     ),
     port: int = typer.Option(8089, help="Splunk management port (REST mode)."),
     verify_ssl: bool = typer.Option(True, help="Verify TLS certificate (REST mode)."),
-    queries_dir: str = typer.Option(_QUERIES_DIR_DEFAULT, help="Directory with queries/*.spl (REST mode)."),
+    queries_dir: Optional[str] = typer.Option(None, help="Override the bundled SPL queries with a custom directory (REST mode)."),
     output_dir: str = typer.Option("./output", help="Where to write the report."),
     annual_spend: Optional[float] = typer.Option(
         None, help="Estimated annual Splunk spend, used to estimate $ savings."

@@ -140,7 +140,7 @@ def test_oneshot_search_coerces_fully_numeric_columns_to_numeric():
     config = RestConfig(
         host="lab", token="fake-token", transport=httpx.MockTransport(handler)
     )
-    collection = collect(config, "queries")
+    collection = collect(config)
 
     assert collection.ingest is not None
     assert not collection.ingest.empty
@@ -164,7 +164,7 @@ def test_oneshot_search_leaves_mixed_columns_as_text():
     config = RestConfig(
         host="lab", token="fake-token", transport=httpx.MockTransport(handler)
     )
-    collection = collect(config, "queries")
+    collection = collect(config)
 
     assert not pd.api.types.is_numeric_dtype(collection.ingest["index"])
     assert pd.api.types.is_numeric_dtype(collection.ingest["value"])
@@ -200,7 +200,7 @@ def test_saved_searches_excludes_splunk_bundled_content_owned_by_nobody():
     config = RestConfig(
         host="lab", token="fake-token", transport=httpx.MockTransport(handler)
     )
-    collection = collect(config, "queries")
+    collection = collect(config)
 
     assert collection.saved_searches is not None
     names = set(collection.saved_searches["name"])
@@ -224,7 +224,7 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
-            collect(config, "queries")
+            collect(config)
         assert "connect" in str(exc_info.value).lower()
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
 
@@ -234,7 +234,7 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
-            collect(config, "queries")
+            collect(config)
         assert "timed out" in str(exc_info.value).lower()
 
     def test_401_on_ingest_raises_rest_collection_error_mentioning_auth(self):
@@ -243,7 +243,7 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
 
         config = RestConfig(host="lab", token="bad-token", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
-            collect(config, "queries")
+            collect(config)
         assert "authentic" in str(exc_info.value).lower()
 
     def test_403_on_ingest_raises_rest_collection_error_mentioning_permissions(self):
@@ -252,7 +252,7 @@ class TestMandatoryIngestFailureBecomesRestCollectionError:
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
-            collect(config, "queries")
+            collect(config)
         assert "permission" in str(exc_info.value).lower()
 
 
@@ -308,7 +308,7 @@ class TestDescribeRestErrorIsAlwaysEnglish:
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError):
-            collect(config, "queries")
+            collect(config)
 
     def test_malformed_json_on_ingest_raises_rest_collection_error(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -316,7 +316,7 @@ class TestDescribeRestErrorIsAlwaysEnglish:
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError) as exc_info:
-            collect(config, "queries")
+            collect(config)
         assert "malformed" in str(exc_info.value).lower() or "json" in str(exc_info.value).lower()
 
     def test_fatal_message_with_http_200_on_ingest_raises_rest_collection_error(self):
@@ -330,7 +330,7 @@ class TestDescribeRestErrorIsAlwaysEnglish:
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
         with pytest.raises(RestCollectionError):
-            collect(config, "queries")
+            collect(config)
 
 
 class TestOptionalSourcesDegradeWithoutAbortingTheAudit:
@@ -352,7 +352,7 @@ class TestOptionalSourcesDegradeWithoutAbortingTheAudit:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.ingest is not None
         assert collection.audit_searches is None
@@ -373,7 +373,7 @@ class TestOptionalSourcesDegradeWithoutAbortingTheAudit:
             raise AssertionError(f"unexpected request: {request.url}")
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.ingest is not None
         assert collection.saved_searches is None
@@ -393,7 +393,7 @@ class TestOptionalSourcesDegradeWithoutAbortingTheAudit:
             return httpx.Response(403, json={"messages": [{"type": "ERROR", "text": "denied"}]})
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")  # no debe levantar excepción
+        collection = collect(config)  # no debe levantar excepción
 
         assert collection.ingest is not None
         assert not collection.ingest.empty
@@ -424,7 +424,7 @@ class TestLastSeenEndToEnd:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["last_seen"] == SignalAvailability.AVAILABLE
         assert collection.last_seen is not None
@@ -455,7 +455,7 @@ class TestLastSeenEndToEnd:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["last_seen"] == SignalAvailability.PARTIAL
         assert collection.last_seen is not None
@@ -486,7 +486,7 @@ class TestLastSeenEndToEnd:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["last_seen"] == SignalAvailability.AVAILABLE
         assert set(collection.last_seen["index"]) == {"billing"}
@@ -503,7 +503,7 @@ class TestLastSeenEndToEnd:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.last_seen is None
         assert collection.sources_available["last_seen"] == SignalAvailability.ERROR
@@ -646,7 +646,7 @@ class TestD015AuditIndexAccessProbe:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["audit_searches"] == SignalAvailability.AVAILABLE
         assert collection.audit_searches is not None
@@ -676,7 +676,7 @@ class TestD015AuditIndexAccessProbe:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
         assert collection.audit_searches is None
@@ -701,7 +701,7 @@ class TestD015AuditIndexAccessProbe:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
 
@@ -722,7 +722,7 @@ class TestD015AuditIndexAccessProbe:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
         assert "could not reliably confirm" in collection.diagnostics["audit_searches"]
@@ -748,7 +748,7 @@ class TestD015AuditIndexAccessProbe:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["audit_searches"] == SignalAvailability.UNAVAILABLE
 
@@ -774,7 +774,7 @@ class TestD015AuditIndexAccessProbe:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["audit_searches"] == SignalAvailability.AVAILABLE
 
@@ -798,7 +798,7 @@ class TestD015AuditIndexAccessProbe:
             return _saved_searches_response([])
 
         config = RestConfig(host="lab", token="t", transport=httpx.MockTransport(handler))
-        collection = collect(config, "queries")
+        collection = collect(config)
 
         assert collection.sources_available["audit_searches"] == SignalAvailability.AVAILABLE
 
@@ -868,7 +868,7 @@ class TestD015SafetyInvariantEndToEnd:
         config = RestConfig(
             host="lab", token="t", transport=httpx.MockTransport(self._handler(grant_audit_access=grant_audit_access))
         )
-        collection = collect(config, "queries")
+        collection = collect(config)
         datasets, summary = build_datasets(collection)
         classify_all(
             datasets,

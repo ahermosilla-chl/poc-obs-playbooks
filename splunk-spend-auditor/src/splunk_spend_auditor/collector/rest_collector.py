@@ -34,6 +34,7 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
+from importlib import resources
 from pathlib import Path
 from urllib.parse import quote
 
@@ -490,7 +491,7 @@ def _collect_last_seen(
     return df, availability
 
 
-def collect(config: RestConfig, queries_dir: str) -> RawCollection:
+def collect(config: RestConfig, queries_dir: str | None = None) -> RawCollection:
     """Punto de entrada del modo REST. Ejecuta las mismas queries
     documentadas en queries/*.spl contra un Splunk real.
 
@@ -502,7 +503,14 @@ def collect(config: RestConfig, queries_dir: str) -> RawCollection:
     (POSSIBLE_WASTE/PROTECTED/REVIEW/UNKNOWN) -- solo recolecta y reporta
     disponibilidad; esa responsabilidad es exclusiva de scoring/rules.py."""
 
-    queries_path = Path(queries_dir)
+    # Fase 5B: por defecto las queries vienen empaquetadas con el paquete
+    # (funciona instalado, desde el ejecutable standalone y desde cualquier
+    # cwd); queries_dir solo existe para sobreescribirlas explícitamente.
+    queries_path = (
+        Path(queries_dir)
+        if queries_dir
+        else Path(str(resources.files("splunk_spend_auditor") / "queries"))
+    )
     collection = RawCollection()
 
     with _client(config) as client:

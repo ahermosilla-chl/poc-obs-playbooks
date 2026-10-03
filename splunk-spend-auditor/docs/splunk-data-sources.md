@@ -219,7 +219,7 @@ parámetro `index=` (incluso con wildcard, `index=*`) solo **filtra** qué
 índices se incluyen en el cómputo — no produce un desglose por índice. Si dos
 índices distintos comparten el mismo valor de `sourcetype`, sus tiempos
 quedan agregados en una sola fila sin forma de atribuir cada uno a su índice.
-La query original de Fase 2 (`queries/metadata_last_seen.spl`) asumía
+La query original de Fase 2 (`src/splunk_spend_auditor/queries/metadata_last_seen.spl`) asumía
 incorrectamente que existía un campo `index` en esa salida; en la práctica
 producía una columna `index` vacía en el 100% de los casos, de forma
 silenciosa (sin error, sin warning). **Corregido** ejecutando `metadata` una

@@ -18,7 +18,7 @@ Strictly necessary for `audit`/`quickscan` in REST mode to run at all.
 
 | Access | Why | Evidence |
 |---|---|---|
-| Read access to the `_internal` index | `ingest_by_index_sourcetype.spl` reads `license_usage.log`, which lives in `_internal`. This is the **only mandatory** source — if it fails, the CLI aborts with an error instead of producing a report (see `RestCollectionError` in `cli.py`). | [VERIFIED] — `queries/ingest_by_index_sourcetype.spl` comment: "requiere acceso al índice `_internal` + capacidad `search`. No requiere rol admin." Confirmed against the real lab in Fase 3A. |
+| Read access to the `_internal` index | `ingest_by_index_sourcetype.spl` reads `license_usage.log`, which lives in `_internal`. This is the **only mandatory** source — if it fails, the CLI aborts with an error instead of producing a report (see `RestCollectionError` in `cli.py`). | [VERIFIED] — `src/splunk_spend_auditor/queries/ingest_by_index_sourcetype.spl` comment: "requiere acceso al índice `_internal` + capacidad `search`. No requiere rol admin." Confirmed against the real lab in Fase 3A. |
 | The built-in `search` capability | Needed to run any search, including the ones above. Present by default in Splunk's built-in `user` role. | [VERIFIED] — same source as above. |
 | A valid authentication token (Bearer) | The CLI only supports token auth, never username/password (see `docs/splunk-permissions.md#token--authentication` below). | [VERIFIED] — `rest_collector.py`: `headers={"Authorization": f"Bearer {config.token}"}`, the only auth path in the code. |
 

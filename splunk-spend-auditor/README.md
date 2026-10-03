@@ -106,7 +106,7 @@ infirió (ver `docs/controlled-validation.md`).
 ## Uso contra tu propio entorno Splunk
 
 **Modo CSV (sin credenciales):**
-1. Corre las queries de `queries/*.spl` en Splunk Search.
+1. Corre las queries de `src/splunk_spend_auditor/queries/*.spl` en Splunk Search.
 2. Exporta cada resultado a CSV con el nombre esperado (ver
    `sample-data/schema/` para el esquema exacto de cada archivo).
 3. Corre `splunk-spend-auditor audit --from-csv <tu-directorio>`.
@@ -137,6 +137,28 @@ Required/Recommended/Optional, con qué pasa si falta cada uno (nunca se
 asume "cero uso" por un permiso faltante — se degrada de forma
 conservadora, ver D013/D014/D015 en `DECISIONS.md`).
 
+## Standalone distribution (distribución para usuarios finales)
+
+> **Estado:** el mecanismo de build existe y fue verificado solo en Linux
+> x86_64. **Todavía no hay binarios públicos** para ninguna plataforma.
+
+El objetivo es un ejecutable portable (sin Python, pip ni repositorio):
+`./splunk-spend-auditor demo` (Windows: `splunk-spend-auditor.exe demo`).
+Los desarrolladores lo construyen con PyInstaller (`--onefile`); PyInstaller
+**no cross-compila**, así que cada plataforma se construye en su propio SO:
+
+```bash
+pip install -e ".[build]"
+make build            # o: python scripts/build.py
+python scripts/smoke_test.py dist/<artefacto>
+```
+
+Genera `dist/splunk-spend-auditor-<version>-<os>-<arch>[.exe]` más su
+`.sha256` (`dist/` está en `.gitignore`). Plataformas previstas:
+`linux-x86_64`, `macos-arm64`, `windows-x86_64.exe`. La instalación con
+`pip install -e .` descrita arriba sigue siendo la vía para desarrollo.
+`splunk-spend-auditor --version` muestra la versión.
+
 ## Estructura del repositorio
 
 ```
@@ -144,7 +166,7 @@ docs/                   Especificación completa (arquitectura, scoring,
                          seguridad, diseño del reporte, fuentes de datos de
                          Splunk, permisos Splunk, guía de validación
                          controlada para testers)
-queries/                Queries SPL comentadas y listas para exportar a CSV
+src/.../queries/        Queries SPL comentadas y listas para exportar a CSV
 sample-data/            Escenario sintético reproducible (10+ casos) y
                          esquemas de referencia
 src/splunk_spend_auditor/
@@ -156,8 +178,8 @@ src/splunk_spend_auditor/
     scoring/            Reglas de clasificación, score, cálculo de ahorro
     reports/            Generación de reportes HTML/Markdown (Jinja2)
     cli.py              CLI (Typer): `quickscan` y `audit`
-templates/              Plantillas Jinja2 de los reportes
-tests/                  Suite pytest (182 tests) -- incluye un test de
+src/.../templates/      Plantillas Jinja2 de los reportes
+tests/                  Suite pytest (188 tests) -- incluye un test de
                          integración end-to-end contra sample-data/case_mixed
 PROJECT_STATUS.md       Estado exacto del proyecto, para retomar sin perder contexto
 DECISIONS.md            Registro de decisiones de arquitectura/producto
